@@ -6,11 +6,14 @@ import * as plugin from '../src/index.js';
 import { mockFetch } from './utils/fetch-mock.js';
 import {
   CONFIG,
+  ITEM,
   PUBLISH,
   STATUS,
   UPLOAD,
   stepContext,
 } from './utils/context.js';
+// @ts-expect-error semantic-release internals are not typed
+import loadPlugins from 'semantic-release/lib/plugins/index.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
 import type { StepContext } from '../src/plugin-config.js';
@@ -18,8 +21,9 @@ import type { StepContext } from '../src/plugin-config.js';
 afterEach(() => jest.restoreAllMocks());
 
 describe('plugin entry point', () => {
-  it('exports the three semantic-release steps, like semantic-release-chrome', () => {
+  it('exports the semantic-release steps, like semantic-release-chrome', () => {
     expect(Object.keys(plugin).sort()).toEqual([
+      'addChannel',
       'prepare',
       'publish',
       'verifyConditions',
@@ -61,5 +65,54 @@ describe('plugin entry point', () => {
         ).toBe('1.1.0');
       },
     );
+  });
+
+  it('is loaded by the real semantic-release plugin loader, addChannel included', async () => {
+    const calls = mockFetch({
+      [`POST https://chromewebstore.googleapis.com/v2/${ITEM}:setPublishedDeployPercentage`]:
+        { json: {} },
+    });
+    const { context } = stepContext();
+    const scope = () => ({
+      log() {},
+      success() {},
+      warn() {},
+      error() {},
+      scope: () => scope(),
+    });
+    const logger = scope();
+    const steps = await loadPlugins(
+      {
+        cwd: process.cwd(),
+        env: context.env,
+        logger,
+        options: {
+          plugins: [
+            [{ ...plugin }, { ...CONFIG, promoteDeployPercentage: 30 }],
+          ],
+        },
+      },
+      {},
+    );
+    expect(typeof steps.addChannel).toBe('function');
+    expect(typeof steps.verifyConditions).toBe('function');
+    const release = await steps.addChannel({
+      cwd: process.cwd(),
+      env: context.env,
+      options: {},
+      branch: { name: 'main' },
+      nextRelease: { version: '1.1.0', channel: 'latest' },
+      lastRelease: {},
+      commits: [],
+      logger,
+    });
+    expect(release).toMatchObject([
+      {
+        name: 'Chrome Web Store',
+        version: '1.1.0',
+        url: 'https://chromewebstore.google.com/detail/ext-1',
+      },
+    ]);
+    expect(calls[0].body).toEqual({ deployPercentage: 30 });
   });
 });
