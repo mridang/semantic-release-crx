@@ -88,6 +88,7 @@ The Chrome Web Store API can update an item but cannot create one.
   release before anything is versioned or tagged.
 - **`prepare`** writes the next version into `manifestPath` (and
   `additionalManifests`) and zips `distFolder` to `asset`.
+- **`addChannel`** (opt in) raises the published rollout percentage; see below.
 - **`publish`** uploads the zip, waits until the store has finished processing
   it, and then submits it for review. It never submits unless the upload
   reported `SUCCEEDED`. It returns
@@ -97,22 +98,24 @@ The Chrome Web Store API can update an item but cannot create one.
 
 ## Configuration
 
-| Option                | Default                               | Description                                                                                                                                                                                                                                                                      |
-| --------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `publisherId`         | `CHROME_PUBLISHER_ID` env             | **Required.** Your publisher ID: Chrome Web Store Developer Dashboard → Account → Publisher ID. **New**: V2 addresses items as `publishers/{publisherId}/items/{extensionId}`.                                                                                                   |
-| `extensionId`         |                                       | **Required.** The 32 letter item ID (the last part of the store URL, or "Item ID" in the dashboard). May also be an object mapping a branch name to an item ID, so a pre-release branch can publish to a separate staging item. A branch with no entry is an error.              |
-| `asset`               |                                       | **Required** in `prepare` and `publish`. Path of the zip file. A [lodash template](https://lodash.com/docs/#template) with `branch`, `lastRelease`, `nextRelease` and `commits` available, for example `my-ext-v${nextRelease.version}.zip`. Relative paths are inside the cwd.  |
-| `distFolder`          | `dist`                                | Folder whose contents are zipped.                                                                                                                                                                                                                                                |
-| `manifestPath`        | `<distFolder>/manifest.json`          | Manifest that receives the new version.                                                                                                                                                                                                                                          |
-| `additionalManifests` | `[]`                                  | **New.** More manifests that receive the same version, for example the `src/manifest.json` that is committed to git.                                                                                                                                                             |
-| `target`              | `default`                             | `default` submits for review and publishes once approved. `staged` publishes to the staging area once approved, so you release it from the dashboard. `draft` uploads without submitting. `local` neither needs nor contacts the store. `trustedTesters` is accepted, see below. |
-| `prerelease`          | `convert`                             | **New.** What to do for versions like `1.2.0-beta.3`: `convert`, `skip` (build the zip but do not contact the store) or `reject` (fail).                                                                                                                                         |
-| `deployPercentage`    | the dashboard value                   | **New.** Initial rollout percentage, 0 to 100.                                                                                                                                                                                                                                   |
-| `skipReview`          | `false`                               | **New.** Ask the store to skip review when the item qualifies. The API refuses when review is required.                                                                                                                                                                          |
-| `failOnWarnings`      | `false`                               | **New.** Fail the release when the store returns a warning that is not in `ignoredWarnings`. Warnings are always logged.                                                                                                                                                         |
-| `ignoredWarnings`     | `['PUBLISHED_WITH_FRICTION_WARNING']` | **New.** Warning reasons that never fail the release (the original plugin's whitelist).                                                                                                                                                                                          |
-| `pollIntervalMs`      | `5000`                                | **New.** Time between upload status checks.                                                                                                                                                                                                                                      |
-| `pollTimeoutMs`       | `300000`                              | **New.** Longest wait for an asynchronous upload. The release fails, without publishing, when it is exceeded.                                                                                                                                                                    |
+| Option                    | Default                               | Description                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publisherId`             | `CHROME_PUBLISHER_ID` env             | **Required.** Your publisher ID: Chrome Web Store Developer Dashboard → Account → Publisher ID. **New**: V2 addresses items as `publishers/{publisherId}/items/{extensionId}`.                                                                                                   |
+| `extensionId`             |                                       | **Required.** The 32 letter item ID (the last part of the store URL, or "Item ID" in the dashboard). May also be an object mapping a branch name to an item ID, so a pre-release branch can publish to a separate staging item. A branch with no entry is an error.              |
+| `asset`                   |                                       | **Required** in `prepare` and `publish`. Path of the zip file. A [lodash template](https://lodash.com/docs/#template) with `branch`, `lastRelease`, `nextRelease` and `commits` available, for example `my-ext-v${nextRelease.version}.zip`. Relative paths are inside the cwd.  |
+| `distFolder`              | `dist`                                | Folder whose contents are zipped.                                                                                                                                                                                                                                                |
+| `manifestPath`            | `<distFolder>/manifest.json`          | Manifest that receives the new version.                                                                                                                                                                                                                                          |
+| `additionalManifests`     | `[]`                                  | **New.** More manifests that receive the same version, for example the `src/manifest.json` that is committed to git.                                                                                                                                                             |
+| `target`                  | `default`                             | `default` submits for review and publishes once approved. `staged` publishes to the staging area once approved, so you release it from the dashboard. `draft` uploads without submitting. `local` neither needs nor contacts the store. `trustedTesters` is accepted, see below. |
+| `prerelease`              | `convert`                             | **New.** What to do for versions like `1.2.0-beta.3`: `convert`, `skip` (build the zip but do not contact the store) or `reject` (fail).                                                                                                                                         |
+| `deployPercentage`        | the dashboard value                   | **New.** Initial rollout percentage, 0 to 100.                                                                                                                                                                                                                                   |
+| `cancelPendingSubmission` | `false`                               | **New.** Before uploading, cancel a submission that is still `PENDING_REVIEW`. See [Cancelling a pending submission](#cancelling-a-pending-submission).                                                                                                                          |
+| `promoteDeployPercentage` | unset                                 | **New.** Rollout percentage (0 to 100) to raise the published revision to when semantic-release promotes a release to another channel. See [Raising the rollout](#raising-the-rollout-addchannel).                                                                               |
+| `skipReview`              | `false`                               | **New.** Ask the store to skip review when the item qualifies. The API refuses when review is required.                                                                                                                                                                          |
+| `failOnWarnings`          | `false`                               | **New.** Fail the release when the store returns a warning that is not in `ignoredWarnings`. Warnings are always logged.                                                                                                                                                         |
+| `ignoredWarnings`         | `['PUBLISHED_WITH_FRICTION_WARNING']` | **New.** Warning reasons that never fail the release (the original plugin's whitelist).                                                                                                                                                                                          |
+| `pollIntervalMs`          | `5000`                                | **New.** Time between upload status checks.                                                                                                                                                                                                                                      |
+| `pollTimeoutMs`           | `300000`                              | **New.** Longest wait for an asynchronous upload. The release fails, without publishing, when it is exceeded.                                                                                                                                                                    |
 
 The `target` values behave like this:
 
@@ -264,6 +267,101 @@ Use one item per branch, because Chrome compares versions as numbers and
 would be rejected. Use `prerelease: 'skip'` to build the zip for pre-releases
 without contacting the store, or `'reject'` to forbid them.
 
+## Cancelling a pending submission
+
+The store allows one active submission per item. The V2 description of
+`cancelSubmission` reads: "Cancel the current active submission of an item if
+present. This can be used to cancel the review of a pending submission." A
+release made while the previous one is still `PENDING_REVIEW` may therefore be
+refused (the older V1 documentation said so; whether V2 does the same has not
+been verified).
+
+- By default the publish step checks the item first. If a submission is
+  pending it logs a warning, carries on, and if the store then refuses the
+  upload or submission, the error carries a hint to set the option below. A
+  failed status check is only logged in this mode.
+- With `cancelPendingSubmission: true` a pending submission is cancelled
+  exactly once, before the upload. If the status check or the cancel fails,
+  nothing is uploaded or published.
+
+The cancel happens only when the option is set, never as a side effect of
+anything else. It is skipped for `target: 'local'`.
+
+## Raising the rollout (`addChannel`)
+
+semantic-release calls `addChannel` when an existing release is promoted to
+another channel, for example from `next` to `latest`. If
+`promoteDeployPercentage` is set, the plugin then calls
+`setPublishedDeployPercentage` for the item; without the option the step does
+nothing. The V2 description says: "Set a higher target deploy percentage for
+the item's published revision. This will be updated without the item being
+submitted for review. This is only available to items with over 10,000
+seven-day active users", and the request schema adds that the value "must be
+larger than the existing target percentage". The plugin does not check either
+precondition itself: the store's refusal is reported with those two reminders.
+
+```js
+['@mridang/semantic-release-crx', { /* ... */ promoteDeployPercentage: 100 }];
+```
+
+## Using the client directly
+
+The calls the plugin makes are exported from the `@mridang/semantic-release-crx/client`
+subpath, for your own scripts. They authenticate with the same environment
+variables as the plugin (or pass `env`):
+
+```js
+import {
+  fetchStatus,
+  cancelSubmission,
+  setPublishedDeployPercentage,
+  rollback,
+} from '@mridang/semantic-release-crx/client';
+```
+
+Each takes `{ publisherId, extensionId, env?, log? }` plus the call's own
+fields.
+
+### Rolling back
+
+`rollback` is never triggered by the plugin. A rollback publishes an older
+package to all users, so it must be a deliberate act, not a side effect of a
+failed run. The V2 description: "Rolls back an item's published CRX package to
+a specified previously published CRX package and publishes it to all users."
+The request needs `rollbackReason` (kept for auditing and shown in the
+dashboard) and `newVersion`, which "effectively rolls forward the previous
+package by giving it a higher version number than the currently-published
+package" (so with 1.1 published, 1.1.1 or 1.2 work but 1.0 does not).
+`targetCrxVersion` defaults to the last published version. `validateOnly: true`
+validates the request without starting the rollback.
+
+```js
+// rollback.mjs, run with CHROME_ACCESS_TOKEN (or the other credentials) set
+import { rollback } from '@mridang/semantic-release-crx/client';
+
+await rollback({
+  publisherId: process.env.CHROME_PUBLISHER_ID,
+  extensionId: 'abcdefghijklmnopabcdefghijklmnop',
+  targetCrxVersion: '1.1.0',
+  newVersion: '1.2.1',
+  rollbackReason: 'Crash on startup in 1.2.0',
+  validateOnly: process.env.DRY_RUN === 'true',
+});
+```
+
+From CI, run it in a manually triggered workflow (`on: workflow_dispatch` with
+the versions and reason as inputs) after the `google-github-actions/auth` step,
+so that a person starts it:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      target: { description: Version to roll back to, required: true }
+      newVersion: { description: Version to publish it as, required: true }
+      reason: { description: Why, required: true }
+```
+
 ## Known limitations
 
 - **Warnings and a half finished release.** The store only returns warnings
@@ -274,6 +372,11 @@ without contacting the store, or `'reject'` to forbid them.
   warnings are judged after the submission: the step then fails although the
   item is already in review, and a `REJECTED` or `CANCELLED` state is reported
   the same way. Check the Developer Dashboard before re-running.
+- **Trusted testers.** V2 offers no way to choose the audience per request:
+  the publish request has only `publishType`, `deployInfos`, `skipReview` and
+  `blockOnWarnings`, while `PUBLISHED_TO_TESTERS` is merely a state the store
+  reports. The audience therefore appears to be a Developer Dashboard setting.
+  This is an inference from the API description, not something verified.
 - **Upload state.** The store documents `lastAsyncUploadState` as the state of
   the last asynchronous upload in the past 24 hours. The plugin trusts it and
   publishes only after it reports `SUCCEEDED`, treating `NOT_FOUND` as "keep
