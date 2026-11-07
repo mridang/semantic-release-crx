@@ -42,6 +42,7 @@ export interface PublishRequest {
   publishType: 'DEFAULT_PUBLISH' | 'STAGED_PUBLISH';
   deployInfos?: { deployPercentage: number }[];
   skipReview?: boolean;
+  blockOnWarnings?: boolean;
 }
 
 export interface PublishResponse {

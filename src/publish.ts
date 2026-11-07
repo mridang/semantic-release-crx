@@ -117,6 +117,9 @@ export async function publish(
       ? {}
       : { deployInfos: [{ deployPercentage: config.deployPercentage }] }),
     ...(config.skipReview ? { skipReview: true } : {}),
+    ...(config.failOnWarnings && config.ignoredWarnings?.length === 0
+      ? { blockOnWarnings: true }
+      : {}),
   });
   const ignored = config.ignoredWarnings ?? DEFAULT_IGNORED_WARNINGS;
   const warnings = result.warningInfo?.warnings ?? [];

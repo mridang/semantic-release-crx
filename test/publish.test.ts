@@ -410,3 +410,36 @@ describe('publish', () => {
     });
   });
 });
+
+describe('publish blockOnWarnings', () => {
+  const body = async (config: Record<string, unknown>) => {
+    let sent: unknown;
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
+      });
+      await run(dir, config).result;
+      sent = calls[1].body;
+    });
+    return sent as Record<string, unknown>;
+  };
+
+  it('asks the store to block before submitting when no warning may be ignored', async () => {
+    expect(
+      await body({ failOnWarnings: true, ignoredWarnings: [] }),
+    ).toHaveProperty('blockOnWarnings', true);
+  });
+
+  it('does not when some warnings are ignored, the default whitelist applies, or failOnWarnings is off', async () => {
+    expect(
+      await body({ failOnWarnings: true, ignoredWarnings: ['X'] }),
+    ).not.toHaveProperty('blockOnWarnings');
+    expect(await body({ failOnWarnings: true })).not.toHaveProperty(
+      'blockOnWarnings',
+    );
+    expect(await body({ ignoredWarnings: [] })).not.toHaveProperty(
+      'blockOnWarnings',
+    );
+  });
+});
