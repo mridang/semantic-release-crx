@@ -595,3 +595,14 @@ describe('publish cancelPendingSubmission', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('publish asset template', () => {
+  it('reports EINVALIDASSET when the template cannot be evaluated', async () => {
+    mockFetch({});
+    await expect(
+      run('/nowhere', { asset: '${nope.version}.zip' }).result,
+    ).rejects.toMatchObject({
+      code: 'EINVALIDASSET',
+    });
+  });
+});

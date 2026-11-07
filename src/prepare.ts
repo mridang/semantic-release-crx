@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { resolveAsset } from './asset.js';
+import template from 'lodash/template.js';
 import { aggregate, crxError } from './errors.js';
 import { Extension } from './extension.js';
 import {
@@ -56,7 +56,22 @@ export async function prepare(
     manifests.map((manifest) => resolve(cwd, manifest)),
   );
   await extension.setVersion(semver, log);
-  const zipPath = resolveAsset(config.asset as string, context);
+  const assetName = (() => {
+    try {
+      return template(config.asset as string)({
+        branch: context.branch,
+        lastRelease: context.lastRelease,
+        nextRelease: context.nextRelease,
+        commits: context.commits,
+      });
+    } catch (error) {
+      throw crxError(
+        `The asset template "${config.asset}" could not be evaluated: ${(error as Error).message}`,
+        'EINVALIDASSET',
+      );
+    }
+  })();
+  const zipPath = resolve(cwd, assetName);
   const count = await extension.zip(zipPath);
   log(`Wrote zipped file with ${count} files to ${zipPath}`);
 }

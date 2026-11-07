@@ -167,3 +167,36 @@ describe('prepare', () => {
     });
   });
 });
+
+describe('prepare asset template', () => {
+  it('supports the other lodash delimiters and every documented variable', async () => {
+    await withTmp(files, async (dir) => {
+      await run(
+        dir,
+        {
+          asset:
+            '<%= lastRelease.version %>-${nextRelease.version}-${commits.length}.zip',
+        },
+        { lastRelease: { version: '1.0.0' }, commits: [{}, {}] },
+      ).result;
+      expect(await readFile(join(dir, '1.0.0-1.1.0-2.zip'))).toBeDefined();
+    });
+  });
+
+  it('writes to an absolute asset path as given', async () => {
+    await withTmp(files, async (dir) => {
+      await run(dir, { asset: join(dir, 'abs', 'ext.zip') }).result;
+      expect(await readFile(join(dir, 'abs', 'ext.zip'))).toBeDefined();
+    });
+  });
+
+  it('reports EINVALIDASSET when the template cannot be evaluated', async () => {
+    await withTmp(files, async (dir) => {
+      await expect(
+        run(dir, { asset: '${nope.version}.zip' }).result,
+      ).rejects.toMatchObject({
+        code: 'EINVALIDASSET',
+      });
+    });
+  });
+});

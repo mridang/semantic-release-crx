@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { getAccessToken, resolveCredentials } from './auth.js';
-import { resolveAsset } from './asset.js';
+import template from 'lodash/template.js';
+import { resolve } from 'node:path';
 import { aggregate, crxError } from './errors.js';
 import {
   DEFAULT_IGNORED_WARNINGS,
@@ -132,7 +133,22 @@ export async function publish(
     throw aggregate(problems);
   }
   const extensionId = (extension as { id: string }).id;
-  const assetPath = resolveAsset(config.asset as string, context);
+  const assetName = (() => {
+    try {
+      return template(config.asset as string)({
+        branch: context.branch,
+        lastRelease: context.lastRelease,
+        nextRelease: context.nextRelease,
+        commits: context.commits,
+      });
+    } catch (error) {
+      throw crxError(
+        `The asset template "${config.asset}" could not be evaluated: ${(error as Error).message}`,
+        'EINVALIDASSET',
+      );
+    }
+  })();
+  const assetPath = resolve(context.cwd ?? process.cwd(), assetName);
   const zip = await readFile(assetPath).catch(() => {
     throw crxError(
       `The asset "${assetPath}" does not exist. The prepare step of this plugin creates it, so make sure the plugin is configured for prepare and runs before publish.`,
