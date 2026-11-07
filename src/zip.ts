@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { crc32, deflateRawSync } from 'node:zlib';
+import { deflateRawSync } from 'node:zlib';
+import { crc32 } from './crc32.js';
 import { crxError } from './errors.js';
 
 const LOCAL_HEADER = 0x04034b50;
@@ -31,7 +32,16 @@ async function listFiles(root: string, skip: string): Promise<string[]> {
       }
       const isFile =
         entry.isFile() ||
-        (entry.isSymbolicLink() && (await stat(path)).isFile());
+        (entry.isSymbolicLink() &&
+          (await stat(path).then(
+            (info) => info.isFile(),
+            () => {
+              throw crxError(
+                `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
+                'EBROKENSYMLINK',
+              );
+            },
+          )));
       return isFile && resolve(path) !== skip ? [path] : [];
     }),
   );

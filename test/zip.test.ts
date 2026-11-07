@@ -125,3 +125,20 @@ describe('zipFolder', () => {
     });
   });
 });
+
+describe('zipFolder broken symlinks', () => {
+  it('fails with a coded error naming the path', async () => {
+    await withTmp({ 'dist/manifest.json': '{}' }, async (dir) => {
+      await symlink(
+        join(dir, 'missing.txt'),
+        join(dir, 'dist', 'dangling.txt'),
+      );
+      await expect(
+        zipFolder(join(dir, 'dist'), join(dir, 'a.zip')),
+      ).rejects.toMatchObject({
+        code: 'EBROKENSYMLINK',
+        message: expect.stringContaining('dangling.txt'),
+      });
+    });
+  });
+});
