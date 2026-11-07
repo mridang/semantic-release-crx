@@ -1,7 +1,7 @@
 import { recordingLogger } from './logger.js';
 
-const BASE = 'https://chromewebstore.googleapis.com';
-const ITEM = 'publishers/pub-1/items/ext-1';
+export const BASE = 'https://chromewebstore.googleapis.com';
+export const ITEM = 'publishers/pub-1/items/ext-1';
 export const UPLOAD = `POST ${BASE}/upload/v2/${ITEM}:upload`;
 export const STATUS = `GET ${BASE}/v2/${ITEM}:fetchStatus`;
 export const PUBLISH = `POST ${BASE}/v2/${ITEM}:publish`;

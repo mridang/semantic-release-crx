@@ -29,6 +29,70 @@ interface ReleaseLink {
   url: string;
 }
 
+type Logger = StepContext['logger'];
+
+/**
+ * Look for a submission that is still waiting for review. With
+ * `cancelPendingSubmission` it is cancelled, otherwise a warning is logged,
+ * because the store may refuse a new upload or submission. Without the option
+ * a failed status check is only logged, so the default flow never depends on
+ * it.
+ *
+ * @param config Plugin configuration.
+ * @param client Store client.
+ * @param logger Step logger.
+ * @returns True when a pending submission was found and left in place.
+ */
+async function handlePendingSubmission(
+  config: CrxPluginConfig,
+  client: WebStoreClient,
+  logger: Logger,
+): Promise<boolean> {
+  const warn = logger.warn ?? logger.log;
+  const status = await client.fetchStatus().catch((error: unknown) => {
+    if (config.cancelPendingSubmission) {
+      throw error;
+    }
+    warn(
+      `Could not check for a pending submission: ${(error as Error).message}`,
+    );
+    return undefined;
+  });
+  if (status?.submittedItemRevisionStatus?.state !== 'PENDING_REVIEW') {
+    return false;
+  }
+  if (!config.cancelPendingSubmission) {
+    warn(
+      'A previous submission is still pending review, so the store may refuse this release. Set cancelPendingSubmission to true to cancel it first.',
+    );
+    return true;
+  }
+  logger.log('Cancelling the submission that is pending review...');
+  await client.cancelSubmission();
+  return false;
+}
+
+/**
+ * Point at `cancelPendingSubmission` when a refusal may be caused by a
+ * pending submission that was left in place.
+ *
+ * @param error The error raised by the store call.
+ * @param pending Whether a pending submission was found and kept.
+ * @param config Plugin configuration.
+ * @returns Never; rethrows the error, with a hint appended when relevant.
+ */
+function addPendingHint(
+  error: unknown,
+  pending: boolean,
+  config: CrxPluginConfig,
+): never {
+  if (pending && !config.cancelPendingSubmission && error instanceof Error) {
+    error.message +=
+      ' A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.';
+  }
+  throw error;
+}
+
 /**
  * semantic-release `publish` step. Uploads the zip built by `prepare`, waits
  * for the store to finish processing it, and only then submits it. The
@@ -89,8 +153,11 @@ export async function publish(
     pollTimeoutMs: config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
     log: (message) => logger.log(message),
   });
+  const pending = await handlePendingSubmission(config, client, logger);
   logger.log('Uploading zip file to the Chrome Web Store...');
-  const uploaded = await client.upload(zip);
+  const uploaded = await client
+    .upload(zip)
+    .catch((error: unknown) => addPendingHint(error, pending, config));
   logger.log(
     `Successfully uploaded extension to the Chrome Web Store${
       uploaded.crxVersion ? ` (version ${uploaded.crxVersion})` : ''
@@ -110,17 +177,19 @@ export async function publish(
     );
   }
   logger.log('Publishing extension to the Chrome Web Store...');
-  const result = await client.publish({
-    publishType:
-      config.target === 'staged' ? 'STAGED_PUBLISH' : 'DEFAULT_PUBLISH',
-    ...(config.deployPercentage === undefined
-      ? {}
-      : { deployInfos: [{ deployPercentage: config.deployPercentage }] }),
-    ...(config.skipReview ? { skipReview: true } : {}),
-    ...(config.failOnWarnings && config.ignoredWarnings?.length === 0
-      ? { blockOnWarnings: true }
-      : {}),
-  });
+  const result = await client
+    .publish({
+      publishType:
+        config.target === 'staged' ? 'STAGED_PUBLISH' : 'DEFAULT_PUBLISH',
+      ...(config.deployPercentage === undefined
+        ? {}
+        : { deployInfos: [{ deployPercentage: config.deployPercentage }] }),
+      ...(config.skipReview ? { skipReview: true } : {}),
+      ...(config.failOnWarnings && config.ignoredWarnings?.length === 0
+        ? { blockOnWarnings: true }
+        : {}),
+    })
+    .catch((error: unknown) => addPendingHint(error, pending, config));
   const ignored = config.ignoredWarnings ?? DEFAULT_IGNORED_WARNINGS;
   const warnings = result.warningInfo?.warnings ?? [];
   const blocking = warnings.filter(

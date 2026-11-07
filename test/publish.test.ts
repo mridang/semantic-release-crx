@@ -5,7 +5,9 @@ import { writeFile } from 'node:fs/promises';
 import { publish } from '../src/publish.js';
 import { mockFetch } from './utils/fetch-mock.js';
 import {
+  BASE,
   CONFIG,
+  ITEM,
   PUBLISH,
   STATUS,
   UPLOAD,
@@ -15,6 +17,9 @@ import { withTmp } from './utils/tmpdir.js';
 import type { StepContext } from '../src/plugin-config.js';
 
 afterEach(() => jest.restoreAllMocks());
+
+const mock = (routes: Record<string, unknown>) =>
+  mockFetch({ [STATUS]: { json: {} }, ...routes } as never);
 
 const OK_UPLOAD = { json: { uploadState: 'SUCCEEDED', crxVersion: '1.1.0' } };
 
@@ -39,7 +44,7 @@ const withAsset = (fn: (dir: string) => Promise<void>) =>
 describe('publish', () => {
   it('uploads, then publishes, and returns the release link', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
       });
@@ -49,9 +54,9 @@ describe('publish', () => {
         url: 'https://chromewebstore.google.com/detail/ext-1',
       });
       expect(calls.map((c) => c.method + ' ' + c.url.split('/').pop())).toEqual(
-        ['POST ext-1:upload', 'POST ext-1:publish'],
+        ['GET ext-1:fetchStatus', 'POST ext-1:upload', 'POST ext-1:publish'],
       );
-      expect(calls[1].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
+      expect(calls[2].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
       expect(lines.join('\n')).toMatch(/state PENDING_REVIEW/);
     });
   });
@@ -64,7 +69,7 @@ describe('publish', () => {
         { json: {} },
         { status: 400, json: { error: { message: 'bad zip' } } },
       ]) {
-        const calls = mockFetch({
+        const calls = mock({
           [UPLOAD]: upload,
           [PUBLISH]: { json: { state: 'PUBLISHED' } },
         });
@@ -77,9 +82,10 @@ describe('publish', () => {
 
   it('waits for an asynchronous upload before publishing', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
         [STATUS]: [
+          { json: {} },
           { json: { lastAsyncUploadState: 'IN_PROGRESS' } },
           { json: { lastAsyncUploadState: 'SUCCEEDED' } },
         ],
@@ -87,6 +93,7 @@ describe('publish', () => {
       });
       await run(dir).result;
       expect(calls.map((c) => c.url.split(':').pop())).toEqual([
+        'fetchStatus',
         'upload',
         'fetchStatus',
         'fetchStatus',
@@ -97,7 +104,7 @@ describe('publish', () => {
 
   it('does not publish when the async upload fails or times out', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
         [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
         [PUBLISH]: { json: { state: 'PUBLISHED' } },
@@ -108,7 +115,7 @@ describe('publish', () => {
       expect(calls.some((c) => c.url.endsWith(':publish'))).toBe(false);
     });
     await withAsset(async (dir) => {
-      mockFetch({
+      mock({
         [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
         [STATUS]: { json: { lastAsyncUploadState: 'IN_PROGRESS' } },
       });
@@ -120,16 +127,16 @@ describe('publish', () => {
 
   it('uploads but does not publish for target draft (issues 60, 90)', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({ [UPLOAD]: OK_UPLOAD });
+      const calls = mock({ [UPLOAD]: OK_UPLOAD });
       const { result, lines } = run(dir, { target: 'draft' });
       expect((await result)?.name).toBe('Chrome Web Store');
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(2);
       expect(lines.join('\n')).toMatch(/skipping publish step/);
     });
   });
 
   it('does not contact the store for target local (issue 103)', async () => {
-    const calls = mockFetch({});
+    const calls = mock({});
     const { result, lines } = run('/nowhere', {
       target: 'local',
       extensionId: undefined,
@@ -141,36 +148,36 @@ describe('publish', () => {
 
   it('stages the submission for target staged', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'STAGED' } },
       });
       await run(dir, { target: 'staged' }).result;
-      expect(calls[1].body).toEqual({ publishType: 'STAGED_PUBLISH' });
+      expect(calls[2].body).toEqual({ publishType: 'STAGED_PUBLISH' });
     });
   });
 
   it('accepts trustedTesters, warns, and publishes as default', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PUBLISHED_TO_TESTERS' } },
       });
       const { result, lines } = run(dir, { target: 'trustedTesters' });
       await result;
-      expect(calls[1].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
+      expect(calls[2].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
       expect(lines.join('\n')).toMatch(/Distribution settings/);
     });
   });
 
   it('sends rollout percentage and skipReview', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
       });
       await run(dir, { deployPercentage: 10, skipReview: true }).result;
-      expect(calls[1].body).toEqual({
+      expect(calls[2].body).toEqual({
         publishType: 'DEFAULT_PUBLISH',
         deployInfos: [{ deployPercentage: 10 }],
         skipReview: true,
@@ -180,7 +187,7 @@ describe('publish', () => {
 
   it('logs the friction warning but does not fail (issue 46)', async () => {
     await withAsset(async (dir) => {
-      mockFetch({
+      mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: {
           json: {
@@ -217,13 +224,13 @@ describe('publish', () => {
       },
     };
     await withAsset(async (dir) => {
-      mockFetch(reply);
+      mock(reply);
       const { result, lines } = run(dir);
       await result;
       expect(lines.join('\n')).toContain('BROAD_HOSTS: broad');
     });
     await withAsset(async (dir) => {
-      mockFetch(reply);
+      mock(reply);
       await expect(
         run(dir, { failOnWarnings: true }).result,
       ).rejects.toMatchObject({
@@ -234,7 +241,7 @@ describe('publish', () => {
 
   it('lets the whitelist be changed', async () => {
     await withAsset(async (dir) => {
-      mockFetch({
+      mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: {
           json: {
@@ -256,7 +263,7 @@ describe('publish', () => {
 
   it('fails clearly, not with a TypeError, on a response without a state (issue 41)', async () => {
     await withAsset(async (dir) => {
-      mockFetch({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: {} } });
+      mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: {} } });
       await expect(run(dir).result).rejects.toMatchObject({
         code: 'EPUBLISHSTATE',
       });
@@ -266,7 +273,7 @@ describe('publish', () => {
   it('fails when the submission is rejected or cancelled', async () => {
     await withAsset(async (dir) => {
       for (const state of ['REJECTED', 'CANCELLED', 'ITEM_STATE_UNSPECIFIED']) {
-        mockFetch({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
+        mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
         await expect(run(dir).result).rejects.toMatchObject({
           code: 'EPUBLISHSTATE',
         });
@@ -283,7 +290,7 @@ describe('publish', () => {
         'PUBLISHED',
         'PUBLISHED_TO_TESTERS',
       ]) {
-        mockFetch({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
+        mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
         expect((await run(dir).result)?.url).toContain('ext-1');
         jest.restoreAllMocks();
       }
@@ -292,7 +299,7 @@ describe('publish', () => {
 
   it('surfaces the store error when publishing is refused (issues 7, 69)', async () => {
     await withAsset(async (dir) => {
-      mockFetch({
+      mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: {
           status: 400,
@@ -313,7 +320,7 @@ describe('publish', () => {
 
   it('skips pre-releases when prerelease is skip, but still publishes stable releases', async () => {
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
       });
@@ -333,7 +340,7 @@ describe('publish', () => {
 
   it('publishes to the extension mapped to the branch (issues 24, 111)', async () => {
     await withTmp({ 'ext-v1.1.0.zip': 'zip' }, async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         'POST https://chromewebstore.googleapis.com/upload/v2/publishers/pub-1/items/staging-id:upload':
           OK_UPLOAD,
         'POST https://chromewebstore.googleapis.com/v2/publishers/pub-1/items/staging-id:publish':
@@ -352,7 +359,7 @@ describe('publish', () => {
   });
 
   it('reports every missing option together', async () => {
-    mockFetch({});
+    mock({});
     const { result } = run(
       '/nowhere',
       { extensionId: undefined, publisherId: undefined, asset: undefined },
@@ -368,7 +375,7 @@ describe('publish', () => {
 
   it('fails with ENOASSETFILE when prepare has not produced the zip', async () => {
     await withTmp({}, async (dir) => {
-      mockFetch({});
+      mock({});
       await expect(run(dir).result).rejects.toMatchObject({
         code: 'ENOASSETFILE',
       });
@@ -377,7 +384,7 @@ describe('publish', () => {
 
   it('fails when there are no credentials', async () => {
     await withAsset(async (dir) => {
-      mockFetch({});
+      mock({});
       await expect(run(dir, {}, { env: {} }).result).rejects.toMatchObject({
         code: 'ENOCREDENTIALS',
       });
@@ -386,7 +393,7 @@ describe('publish', () => {
 
   it('never writes the token to the log or into an error', async () => {
     await withAsset(async (dir) => {
-      mockFetch({
+      mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { status: 403, json: { error: { message: 'denied' } } },
       });
@@ -400,7 +407,7 @@ describe('publish', () => {
   it('reads the zip the asset template points at', async () => {
     await withTmp({}, async (dir) => {
       await writeFile(join(dir, 'chrome-main.zip'), 'zip');
-      mockFetch({
+      mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PUBLISHED' } },
       });
@@ -415,12 +422,12 @@ describe('publish blockOnWarnings', () => {
   const body = async (config: Record<string, unknown>) => {
     let sent: unknown;
     await withAsset(async (dir) => {
-      const calls = mockFetch({
+      const calls = mock({
         [UPLOAD]: OK_UPLOAD,
         [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
       });
       await run(dir, config).result;
-      sent = calls[1].body;
+      sent = calls[2].body;
     });
     return sent as Record<string, unknown>;
   };
@@ -441,5 +448,150 @@ describe('publish blockOnWarnings', () => {
     expect(await body({ ignoredWarnings: [] })).not.toHaveProperty(
       'blockOnWarnings',
     );
+  });
+});
+
+describe('publish cancelPendingSubmission', () => {
+  const PENDING = {
+    json: { submittedItemRevisionStatus: { state: 'PENDING_REVIEW' } },
+  };
+  const CANCEL = `POST ${BASE}/v2/${ITEM}:cancelSubmission`;
+  const ops = (calls: { url: string }[]) =>
+    calls.map((c) => c.url.split(':').pop());
+
+  it('cancels exactly once, before the upload, when a submission is pending', async () => {
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [STATUS]: PENDING,
+        [CANCEL]: { json: {} },
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
+      });
+      const { result, lines } = run(dir, { cancelPendingSubmission: true });
+      await result;
+      expect(ops(calls)).toEqual([
+        'fetchStatus',
+        'cancelSubmission',
+        'upload',
+        'publish',
+      ]);
+      expect(lines.join('\n')).toMatch(/Cancelling/);
+    });
+  });
+
+  it('does not cancel when nothing is pending', async () => {
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [STATUS]: {
+          json: { submittedItemRevisionStatus: { state: 'PUBLISHED' } },
+        },
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
+      });
+      await run(dir, { cancelPendingSubmission: true }).result;
+      expect(ops(calls)).toEqual(['fetchStatus', 'upload', 'publish']);
+    });
+  });
+
+  it('only warns when the option is off', async () => {
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [STATUS]: PENDING,
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
+      });
+      const { result, lines } = run(dir);
+      await result;
+      expect(ops(calls)).toEqual(['fetchStatus', 'upload', 'publish']);
+      expect(lines.join('\n')).toMatch(
+        /still pending review.*cancelPendingSubmission/,
+      );
+    });
+  });
+
+  it('adds a hint to a refusal when a pending submission was left in place', async () => {
+    await withAsset(async (dir) => {
+      mockFetch({
+        [STATUS]: PENDING,
+        [UPLOAD]: {
+          status: 400,
+          json: { error: { message: 'item is under review' } },
+        },
+      });
+      await expect(run(dir).result).rejects.toMatchObject({
+        code: 'EWEBSTOREBADREQUEST',
+        message: expect.stringContaining('set cancelPendingSubmission to true'),
+      });
+    });
+  });
+
+  it('adds the same hint when the publish call is refused', async () => {
+    await withAsset(async (dir) => {
+      mockFetch({
+        [STATUS]: PENDING,
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { status: 400, json: { error: { message: 'busy' } } },
+      });
+      await expect(run(dir).result).rejects.toMatchObject({
+        message: expect.stringContaining('cancelPendingSubmission'),
+      });
+    });
+  });
+
+  it('uploads nothing and publishes nothing when the cancel fails', async () => {
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [STATUS]: PENDING,
+        [CANCEL]: {
+          status: 400,
+          json: { error: { message: 'nothing to cancel' } },
+        },
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PUBLISHED' } },
+      });
+      await expect(
+        run(dir, { cancelPendingSubmission: true }).result,
+      ).rejects.toMatchObject({
+        code: 'EWEBSTOREBADREQUEST',
+        message: expect.stringContaining('active submission'),
+      });
+      expect(ops(calls)).toEqual(['fetchStatus', 'cancelSubmission']);
+    });
+  });
+
+  it('stops when the status check fails and cancelling was requested', async () => {
+    await withAsset(async (dir) => {
+      const calls = mockFetch({
+        [STATUS]: { status: 403, json: { error: { message: 'no' } } },
+      });
+      await expect(
+        run(dir, { cancelPendingSubmission: true }).result,
+      ).rejects.toMatchObject({
+        code: 'EWEBSTOREPERMISSION',
+      });
+      expect(calls.some((c) => c.url.endsWith(':upload'))).toBe(false);
+    });
+  });
+
+  it('carries on with a warning when the status check fails and cancelling was not requested', async () => {
+    await withAsset(async (dir) => {
+      mockFetch({
+        [STATUS]: { status: 403, json: { error: { message: 'no' } } },
+        [UPLOAD]: OK_UPLOAD,
+        [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
+      });
+      const { result, lines } = run(dir);
+      expect((await result)?.name).toBe('Chrome Web Store');
+      expect(lines.join('\n')).toMatch(
+        /Could not check for a pending submission/,
+      );
+    });
+  });
+
+  it('never looks for a pending submission for target local', async () => {
+    const calls = mockFetch({});
+    await run('/nowhere', { target: 'local', cancelPendingSubmission: true })
+      .result;
+    expect(calls).toHaveLength(0);
   });
 });
