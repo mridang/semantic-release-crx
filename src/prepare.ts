@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { resolveAsset } from './asset.js';
 import { aggregate, crxError } from './errors.js';
-import { writeManifestVersion } from './manifest.js';
+import { Extension } from './extension.js';
 import {
   DEFAULT_DIST_FOLDER,
   manifestPathOf,
@@ -10,7 +10,6 @@ import {
 } from './plugin-config.js';
 import { validateConfig } from './settings.js';
 import { toManifestVersion } from './version.js';
-import { zipFolder } from './zip.js';
 
 /**
  * semantic-release `prepare` step. Writes the next version into the manifest
@@ -52,11 +51,12 @@ export async function prepare(
     ...(config.additionalManifests ?? []),
   ];
   const log = (message: string): void => context.logger.log(message);
-  await manifests.reduce(async (previous, manifest) => {
-    await previous;
-    await writeManifestVersion(resolve(cwd, manifest), next, semver, log);
-  }, Promise.resolve());
+  const extension = Extension.at(
+    resolve(cwd, distFolder),
+    manifests.map((manifest) => resolve(cwd, manifest)),
+  );
+  await extension.setVersion(semver, log);
   const zipPath = resolveAsset(config.asset as string, context);
-  const count = await zipFolder(resolve(cwd, distFolder), zipPath);
+  const count = await extension.zip(zipPath);
   log(`Wrote zipped file with ${count} files to ${zipPath}`);
 }
