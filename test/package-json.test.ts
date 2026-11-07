@@ -25,9 +25,11 @@ describe('package.json layout', () => {
   it('exposes the main entry and the client subpath from the build output', () => {
     expect(pkg.exports['.'].default).toBe(`./${outDir}/index.js`);
     expect(pkg.exports['.'].types).toBe(`./${outDir}/index.d.ts`);
-    expect(pkg.exports['./client'].default).toBe(`./${outDir}/client.js`);
-    expect(pkg.exports['./client'].types).toBe(`./${outDir}/client.d.ts`);
-    expect(existsSync(new URL('../src/client.ts', import.meta.url))).toBe(true);
+    expect(pkg.exports['./client'].default).toBe(`./${outDir}/webstore.js`);
+    expect(pkg.exports['./client'].types).toBe(`./${outDir}/webstore.d.ts`);
+    expect(existsSync(new URL('../src/webstore.ts', import.meta.url))).toBe(
+      true,
+    );
   });
 
   it('publishes the build output', () => {

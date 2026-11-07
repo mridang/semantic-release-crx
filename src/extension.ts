@@ -2,7 +2,8 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { zipSync } from 'fflate';
-import { crxError } from './errors.js';
+// @ts-expect-error since this is not typed
+import SemanticReleaseError from '@semantic-release/error';
 import { toManifestVersion } from './version.js';
 
 const DOS_EPOCH_1980 = Date.UTC(1980, 0, 1);
@@ -49,7 +50,7 @@ export class Extension {
     await this.manifests.reduce(async (previous, path) => {
       await previous;
       const text = await readFile(path, 'utf8').catch((error: unknown) => {
-        throw crxError(
+        throw new SemanticReleaseError(
           `Could not read the manifest at "${path}": ${(error as Error).message}. Set manifestPath or distFolder so it points at your manifest.json.`,
           'ENOMANIFEST',
         );
@@ -62,7 +63,7 @@ export class Extension {
         parsed === null ||
         Array.isArray(parsed)
       ) {
-        throw crxError(
+        throw new SemanticReleaseError(
           `The manifest at "${path}" is not a valid JSON object.`,
           'EINVALIDMANIFEST',
         );
@@ -114,7 +115,7 @@ export class Extension {
       () => false,
     );
     if (!isFolder) {
-      throw crxError(
+      throw new SemanticReleaseError(
         `The distFolder "${this.distFolder}" does not exist or is not a folder. Build the extension before the prepare step runs, or set distFolder.`,
         'ENODISTFOLDER',
       );
@@ -132,7 +133,7 @@ export class Extension {
             (await stat(path).then(
               (info) => info.isFile(),
               () => {
-                throw crxError(
+                throw new SemanticReleaseError(
                   `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
                   'EBROKENSYMLINK',
                 );
@@ -143,7 +144,7 @@ export class Extension {
     );
     const paths = found.flat().toSorted();
     if (paths.length === 0) {
-      throw crxError(
+      throw new SemanticReleaseError(
         `The distFolder "${this.distFolder}" contains no files to zip.`,
         'ENODISTFOLDER',
       );

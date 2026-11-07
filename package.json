@@ -21,8 +21,8 @@
       "default": "./dist/index.js"
     },
     "./client": {
-      "types": "./dist/client.d.ts",
-      "default": "./dist/client.js"
+      "types": "./dist/webstore.d.ts",
+      "default": "./dist/webstore.js"
     }
   },
   "keywords": [

@@ -1,4 +1,5 @@
-import { crxError } from './errors.js';
+// @ts-expect-error since this is not typed
+import SemanticReleaseError from '@semantic-release/error';
 
 export interface ManifestVersion {
   /**
@@ -36,7 +37,7 @@ const MAX_PART = 65535;
 export function toManifestVersion(semver: string): ManifestVersion {
   const match = SEMVER.exec(semver);
   if (!match) {
-    throw crxError(
+    throw new SemanticReleaseError(
       `Cannot use "${semver}" as a Chrome extension version: it is not a valid semantic version.`,
       'EINVALIDVERSION',
     );
@@ -49,14 +50,14 @@ export function toManifestVersion(semver: string): ManifestVersion {
     .map(Number)
     .at(-1);
   if (pre !== undefined && counter === undefined) {
-    throw crxError(
+    throw new SemanticReleaseError(
       `Cannot use "${semver}" as a Chrome extension version: the pre-release has no numeric identifier to use as the fourth version part.`,
       'EINVALIDVERSION',
     );
   }
   const parts = counter === undefined ? core : [...core, counter];
   if (parts.some((part) => part > MAX_PART)) {
-    throw crxError(
+    throw new SemanticReleaseError(
       `Cannot use "${semver}" as a Chrome extension version: every part must be between 0 and ${MAX_PART}.`,
       'EINVALIDVERSION',
     );

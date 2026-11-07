@@ -1,15 +1,23 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-// noinspection ES6PreferShortImport
-import { WebStoreClient } from '../src/webstore.js';
+import {
+  WebStoreClient,
+  getAccessToken,
+  request,
+  resolveCredentials,
+  sleep,
+} from '../src/webstore.js';
 import { mockFetch } from './utils/fetch-mock.js';
+import {
+  createPublicKey,
+  createVerify,
+  generateKeyPairSync,
+} from 'node:crypto';
+import { join } from 'node:path';
+import { withTmp } from './utils/tmpdir.js';
+import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
+import * as client from '../src/webstore.js';
 
 afterEach(() => jest.restoreAllMocks());
-
-const BASE = 'https://chromewebstore.googleapis.com';
-const ITEM = 'publishers/pub-1/items/ext-1';
-const UPLOAD = `POST ${BASE}/upload/v2/${ITEM}:upload`;
-const STATUS = `GET ${BASE}/v2/${ITEM}:fetchStatus`;
-const PUBLISH = `POST ${BASE}/v2/${ITEM}:publish`;
 
 const make = (lines: string[] = [], overrides = {}): WebStoreClient =>
   new WebStoreClient({
@@ -395,5 +403,523 @@ describe('WebStoreClient.submit', () => {
       });
       jest.restoreAllMocks();
     }
+  });
+});
+
+describe('auth', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const TOKEN = 'POST https://oauth2.googleapis.com/token';
+
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+
+  const serviceAccountJson = JSON.stringify({
+    type: 'service_account',
+    client_email: 'bot@project.iam.gserviceaccount.com',
+    private_key: privateKey,
+  });
+
+  describe('resolveCredentials', () => {
+    it('prefers a ready made access token over everything else', async () => {
+      expect(
+        await resolveCredentials({
+          CHROME_ACCESS_TOKEN: ' ya29.token ',
+          GOOGLE_CLIENT_ID: 'id',
+          GOOGLE_CLIENT_SECRET: 's',
+          GOOGLE_REFRESH_TOKEN: 'r',
+        }),
+      ).toEqual({ kind: 'accessToken', accessToken: 'ya29.token' });
+    });
+
+    it('accepts the OAuth variables the original plugin used', async () => {
+      expect(
+        await resolveCredentials({
+          GOOGLE_CLIENT_ID: 'id',
+          GOOGLE_CLIENT_SECRET: 'secret',
+          GOOGLE_REFRESH_TOKEN: 'refresh\n',
+        }),
+      ).toEqual({
+        kind: 'oauth',
+        clientId: 'id',
+        clientSecret: 'secret',
+        refreshToken: 'refresh',
+      });
+    });
+
+    it('reports each missing OAuth variable with the original codes', async () => {
+      const error = await resolveCredentials({ GOOGLE_CLIENT_ID: 'id' }).catch(
+        (e: unknown) => e as AggregateError,
+      );
+      expect(
+        (error as AggregateError).errors.map((e: { code: string }) => e.code),
+      ).toEqual(['EGOOGLECLIENTSECRET', 'EGOOGLEREFRESHTOKEN']);
+    });
+
+    it('says what to set when nothing is configured', async () => {
+      await expect(resolveCredentials({})).rejects.toMatchObject({
+        code: 'ENOCREDENTIALS',
+        message: expect.stringContaining('CHROME_ACCESS_TOKEN'),
+      });
+    });
+
+    it('rejects a refresh token that is the whole JSON response (issue 7)', async () => {
+      await expect(
+        resolveCredentials({
+          GOOGLE_CLIENT_ID: 'id',
+          GOOGLE_CLIENT_SECRET: 's',
+          GOOGLE_REFRESH_TOKEN: '{"refresh_token":"1//x"}',
+        }),
+      ).rejects.toMatchObject({ code: 'EREFRESHTOKENFORMAT' });
+    });
+
+    it('reads a service account key from the environment as JSON or base64', async () => {
+      const plain = await resolveCredentials({
+        GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountJson,
+      });
+      const encoded = await resolveCredentials({
+        GOOGLE_SERVICE_ACCOUNT_KEY:
+          Buffer.from(serviceAccountJson).toString('base64'),
+      });
+      expect(plain).toMatchObject({
+        kind: 'serviceAccount',
+        clientEmail: 'bot@project.iam.gserviceaccount.com',
+        tokenUri: 'https://oauth2.googleapis.com/token',
+      });
+      expect(encoded).toEqual(plain);
+    });
+
+    it('reads a service account key file', async () => {
+      await withTmp({ 'key.json': serviceAccountJson }, async (dir) => {
+        expect(
+          await resolveCredentials({
+            GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'key.json'),
+          }),
+        ).toMatchObject({ kind: 'serviceAccount' });
+      });
+    });
+
+    it('rejects a missing, malformed or incomplete service account key', async () => {
+      await expect(
+        resolveCredentials({
+          GOOGLE_APPLICATION_CREDENTIALS: '/nonexistent/key.json',
+        }),
+      ).rejects.toMatchObject({ code: 'ESERVICEACCOUNT' });
+      await expect(
+        resolveCredentials({ GOOGLE_SERVICE_ACCOUNT_KEY: '{not json' }),
+      ).rejects.toMatchObject({ code: 'ESERVICEACCOUNT' });
+      await expect(
+        resolveCredentials({
+          GOOGLE_SERVICE_ACCOUNT_KEY: '{"type":"service_account"}',
+        }),
+      ).rejects.toMatchObject({ code: 'ESERVICEACCOUNT' });
+    });
+
+    it('explains how to use workload identity federation instead of a credentials file (issue 105)', async () => {
+      await withTmp(
+        { 'wif.json': JSON.stringify({ type: 'external_account' }) },
+        async (dir) => {
+          await expect(
+            resolveCredentials({
+              GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'wif.json'),
+            }),
+          ).rejects.toMatchObject({
+            code: 'ESERVICEACCOUNT',
+            message: expect.stringContaining('CHROME_ACCESS_TOKEN'),
+          });
+        },
+      );
+    });
+
+    it('does not touch the credentials file when an access token is set', async () => {
+      expect(
+        await resolveCredentials({
+          CHROME_ACCESS_TOKEN: 't',
+          GOOGLE_APPLICATION_CREDENTIALS: '/nonexistent/wif.json',
+        }),
+      ).toEqual({ kind: 'accessToken', accessToken: 't' });
+    });
+  });
+
+  describe('getAccessToken', () => {
+    it('returns an access token without any network call', async () => {
+      const calls = mockFetch({});
+      expect(
+        await getAccessToken({ kind: 'accessToken', accessToken: 'abc' }),
+      ).toBe('abc');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('exchanges a refresh token', async () => {
+      const calls = mockFetch({ [TOKEN]: { json: { access_token: 'fresh' } } });
+      const token = await getAccessToken({
+        kind: 'oauth',
+        clientId: 'id',
+        clientSecret: 'secret',
+        refreshToken: 'refresh',
+      });
+      expect(token).toBe('fresh');
+      expect(calls[0].body).toEqual({
+        client_id: 'id',
+        client_secret: 'secret',
+        refresh_token: 'refresh',
+        grant_type: 'refresh_token',
+      });
+    });
+
+    it('explains an expired or revoked refresh token (issue 114)', async () => {
+      mockFetch({
+        [TOKEN]: {
+          status: 400,
+          json: {
+            error: 'invalid_grant',
+            error_description: 'Token has been expired or revoked.',
+          },
+        },
+      });
+      const error = await getAccessToken({
+        kind: 'oauth',
+        clientId: 'id',
+        clientSecret: 'secret',
+        refreshToken: 'SUPER-SECRET-REFRESH',
+      }).catch((e: unknown) => e as Error & { code: string });
+      expect(error.code).toBe('EREFRESHTOKEN');
+      expect(error.message).toContain('7 days');
+      expect(error.message).toContain('workload identity federation');
+      expect(error.message).not.toContain('SUPER-SECRET-REFRESH');
+    });
+
+    it('reports a rejected OAuth client', async () => {
+      mockFetch({
+        [TOKEN]: { status: 401, json: { error: 'invalid_client' } },
+      });
+      await expect(
+        getAccessToken({
+          kind: 'oauth',
+          clientId: 'id',
+          clientSecret: 's',
+          refreshToken: 'r',
+        }),
+      ).rejects.toMatchObject({ code: 'EGOOGLECLIENT' });
+    });
+
+    it('reports any other failure and an empty token response', async () => {
+      mockFetch({
+        [TOKEN]: [
+          { status: 400, json: { error: 'access_denied' } },
+          { json: {} },
+        ],
+      });
+      const credentials = {
+        kind: 'oauth',
+        clientId: 'i',
+        clientSecret: 's',
+        refreshToken: 'r',
+      } as const;
+      await expect(getAccessToken(credentials)).rejects.toMatchObject({
+        code: 'EAUTH',
+      });
+      await expect(getAccessToken(credentials)).rejects.toMatchObject({
+        code: 'EAUTH',
+      });
+    });
+
+    it('reports a network failure without leaking the request', async () => {
+      jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+      const error = await getAccessToken({
+        kind: 'oauth',
+        clientId: 'id',
+        clientSecret: 'TOPSECRET',
+        refreshToken: 'REFRESH',
+      }).catch((e: unknown) => e as Error & { code: string });
+      expect(error.code).toBe('EAUTH');
+      expect(error.message).not.toMatch(/TOPSECRET|REFRESH/);
+    });
+
+    it('signs a service account assertion Google can verify', async () => {
+      const calls = mockFetch({
+        [TOKEN]: { json: { access_token: 'sa-token' } },
+      });
+      const credentials = await resolveCredentials({
+        GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountJson,
+      });
+      expect(await getAccessToken(credentials)).toBe('sa-token');
+      const body = calls[0].body as { grant_type: string; assertion: string };
+      expect(body.grant_type).toBe(
+        'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      );
+      const [header, claims, signature] = body.assertion.split('.');
+      expect(JSON.parse(Buffer.from(header, 'base64url').toString())).toEqual({
+        alg: 'RS256',
+        typ: 'JWT',
+      });
+      const payload = JSON.parse(
+        Buffer.from(claims, 'base64url').toString(),
+      ) as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        iss: 'bot@project.iam.gserviceaccount.com',
+        scope: 'https://www.googleapis.com/auth/chromewebstore',
+        aud: 'https://oauth2.googleapis.com/token',
+      });
+      expect((payload.exp as number) - (payload.iat as number)).toBe(3600);
+      const ok = createVerify('RSA-SHA256')
+        .update(`${header}.${claims}`)
+        .verify(
+          createPublicKey(publicKey),
+          Buffer.from(signature, 'base64url'),
+        );
+      expect(ok).toBe(true);
+    });
+  });
+});
+
+describe('http', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  describe('request', () => {
+    it('decodes a JSON body', async () => {
+      mockFetch({ 'GET https://x.test/a': { json: { ok: 1 } } });
+      expect(await request('https://x.test/a', {})).toEqual({
+        status: 200,
+        ok: true,
+        body: { ok: 1 },
+      });
+    });
+
+    it('falls back to text for a body that is not JSON', async () => {
+      mockFetch({
+        'GET https://x.test/a': { status: 502, text: '<html>bad</html>' },
+      });
+      expect(await request('https://x.test/a', {})).toMatchObject({
+        status: 502,
+        ok: false,
+        body: '<html>bad</html>',
+      });
+    });
+
+    it('returns an undefined body for an empty response', async () => {
+      mockFetch({ 'GET https://x.test/a': {} });
+      expect((await request('https://x.test/a', {})).body).toBeUndefined();
+    });
+
+    it('retries throttling and server errors when asked to', async () => {
+      const calls = mockFetch({
+        'GET https://x.test/a': [
+          { status: 429 },
+          { status: 503 },
+          { json: { ok: 1 } },
+        ],
+      });
+      const result = await request('https://x.test/a', {}, { retries: 2 });
+      expect(result.ok).toBe(true);
+      expect(calls).toHaveLength(3);
+    });
+
+    it('does not retry unless asked to', async () => {
+      const calls = mockFetch({ 'POST https://x.test/a': { status: 503 } });
+      const result = await request('https://x.test/a', { method: 'POST' });
+      expect(result.status).toBe(503);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('does not retry a client error', async () => {
+      const calls = mockFetch({ 'GET https://x.test/a': { status: 404 } });
+      await request('https://x.test/a', {}, { retries: 3 });
+      expect(calls).toHaveLength(1);
+    });
+
+    it('retries a network failure, then gives up with a message free of secrets', async () => {
+      const spy = jest
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('socket hang up'));
+      await expect(
+        request(
+          'https://x.test/a?token=secret',
+          { headers: { Authorization: 'Bearer secret' } },
+          { retries: 1 },
+        ),
+      ).rejects.toThrow('Network error calling x.test: socket hang up');
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('aborts a request that takes longer than the timeout', async () => {
+      jest.spyOn(globalThis, 'fetch').mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new Error('aborted')),
+            );
+          }),
+      );
+      await expect(
+        request('https://x.test/a', {}, { timeoutMs: 20 }),
+      ).rejects.toThrow(/aborted/);
+    });
+  });
+
+  describe('sleep', () => {
+    it('resolves after the delay', async () => {
+      const start = Date.now();
+      await sleep(15);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(10);
+    });
+  });
+});
+
+describe('client', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const base = {
+    publisherId: 'pub-1',
+    extensionId: 'ext-1',
+    env: { CHROME_ACCESS_TOKEN: 'SECRET-TOKEN' },
+  };
+  const ROLLBACK = `POST ${BASE}/v2/${ITEM}:rollback`;
+  const CANCEL = `POST ${BASE}/v2/${ITEM}:cancelSubmission`;
+  const PROMOTE = `POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`;
+
+  describe('client subpath', () => {
+    it('exports the documented functions', () => {
+      expect(
+        [
+          client.cancelSubmission,
+          client.fetchStatus,
+          client.rollback,
+          client.setPublishedDeployPercentage,
+        ].every((fn) => typeof fn === 'function'),
+      ).toBe(true);
+    });
+  });
+
+  describe('rollback', () => {
+    it('sends the request schema fields with the bearer token', async () => {
+      const calls = mockFetch({ [ROLLBACK]: { json: {} } });
+      await client.rollback({
+        ...base,
+        rollbackReason: 'crash on start',
+        newVersion: '1.2.1',
+        targetCrxVersion: '1.1.0',
+        validateOnly: true,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body).toEqual({
+        rollbackReason: 'crash on start',
+        newVersion: '1.2.1',
+        targetCrxVersion: '1.1.0',
+        validateOnly: true,
+      });
+      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+    });
+
+    it('leaves out the optional fields that were not given', async () => {
+      const calls = mockFetch({ [ROLLBACK]: { json: {} } });
+      await client.rollback({
+        ...base,
+        rollbackReason: 'bad',
+        newVersion: '2.0.1',
+      });
+      expect(calls[0].body).toEqual({
+        rollbackReason: 'bad',
+        newVersion: '2.0.1',
+      });
+    });
+
+    it('requires a reason and a new version before any request', async () => {
+      const calls = mockFetch({});
+      await expect(
+        client.rollback({ ...base, rollbackReason: ' ', newVersion: '1' }),
+      ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
+      await expect(
+        client.rollback({ ...base, rollbackReason: 'x', newVersion: '' }),
+      ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
+      expect(calls).toHaveLength(0);
+    });
+
+    it('maps store errors with a hint about the version', async () => {
+      mockFetch({
+        [ROLLBACK]: {
+          status: 400,
+          json: { error: { message: 'version too low' } },
+        },
+      });
+      await expect(
+        client.rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.0' }),
+      ).rejects.toMatchObject({
+        code: 'EWEBSTOREBADREQUEST',
+        message: expect.stringContaining('newVersion must be higher'),
+      });
+    });
+
+    it('fails with the credentials code when none are available', async () => {
+      mockFetch({});
+      await expect(
+        client.rollback({
+          ...base,
+          env: {},
+          rollbackReason: 'x',
+          newVersion: '1.0.1',
+        }),
+      ).rejects.toMatchObject({ code: 'ENOCREDENTIALS' });
+    });
+
+    it('never exposes the token in an error', async () => {
+      mockFetch({
+        [ROLLBACK]: { status: 401, json: { error: { message: 'bad' } } },
+      });
+      const error = (await client
+        .rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.1' })
+        .catch((e: unknown) => e)) as Error;
+      expect(error.message).not.toContain('SECRET-TOKEN');
+    });
+  });
+
+  describe('cancelSubmission', () => {
+    it('posts an empty body', async () => {
+      const calls = mockFetch({ [CANCEL]: { json: {} } });
+      await client.cancelSubmission(base);
+      expect(calls[0].body).toEqual({});
+    });
+
+    it('maps a store error', async () => {
+      mockFetch({
+        [CANCEL]: { status: 404, json: { error: { message: 'gone' } } },
+      });
+      await expect(client.cancelSubmission(base)).rejects.toMatchObject({
+        code: 'EWEBSTORENOTFOUND',
+      });
+    });
+  });
+
+  describe('setPublishedDeployPercentage', () => {
+    it('posts the percentage', async () => {
+      const calls = mockFetch({ [PROMOTE]: { json: {} } });
+      await client.setPublishedDeployPercentage({
+        ...base,
+        deployPercentage: 25,
+      });
+      expect(calls[0].body).toEqual({ deployPercentage: 25 });
+    });
+
+    it('rejects an invalid percentage before any request', async () => {
+      const calls = mockFetch({});
+      for (const deployPercentage of [-1, 101, 1.5, Number.NaN]) {
+        await expect(
+          client.setPublishedDeployPercentage({ ...base, deployPercentage }),
+        ).rejects.toMatchObject({
+          code: 'EINVALIDDEPLOYPERCENTAGE',
+        });
+      }
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  describe('fetchStatus', () => {
+    it('returns the status', async () => {
+      mockFetch({ [STATUS]: { json: { takenDown: false } } });
+      expect(await client.fetchStatus(base)).toEqual({ takenDown: false });
+    });
   });
 });
