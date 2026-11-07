@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 // @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
 import { fromBase64 } from './utils/base64.js';
@@ -6,7 +7,6 @@ import { readEnv } from './utils/env.js';
 import { signJwt } from './utils/jwt.js';
 import { isPercentage } from './utils/math.js';
 import { isRecord } from './utils/object.js';
-import { sleep } from './utils/sleep.js';
 import { nowSeconds } from './utils/time.js';
 
 export interface HttpResult {
