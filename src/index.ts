@@ -17,6 +17,7 @@ import {
   type CrxPluginConfig,
   type StepContext,
 } from './plugin-config.js';
+import { warn } from './utils/logger.js';
 import { toManifestVersion } from './version.js';
 import {
   getAccessToken,
@@ -101,7 +102,8 @@ export async function verifyConditions(
   const status = await client.fetchStatus();
   logger.log('Chrome Web Store credentials are valid.');
   if (status.takenDown || status.warned) {
-    (logger.warn ?? logger.log)(
+    warn(
+      logger,
       status.takenDown
         ? 'The item has been taken down for a policy violation. Check the Developer Dashboard.'
         : 'The item has a policy warning and will be taken down if not resolved. Check the Developer Dashboard.',
@@ -198,7 +200,6 @@ async function handlePendingSubmission(
   client: WebStoreClient,
   logger: Logger,
 ): Promise<boolean> {
-  const warn = logger.warn ?? logger.log;
   const pending = await client
     .hasPendingSubmission()
     .catch((error: unknown) => {
@@ -206,6 +207,7 @@ async function handlePendingSubmission(
         throw error;
       }
       warn(
+        logger,
         `Could not check for a pending submission: ${(error as Error).message}`,
       );
       return false;
@@ -215,6 +217,7 @@ async function handlePendingSubmission(
   }
   if (!config.cancelPendingSubmission) {
     warn(
+      logger,
       'A previous submission is still pending review, so the store may refuse this release. Set cancelPendingSubmission to true to cancel it first.',
     );
     return true;
@@ -338,7 +341,8 @@ export async function publish(
     return link;
   }
   if (config.target === 'trustedTesters') {
-    (logger.warn ?? logger.log)(
+    warn(
+      logger,
       'Target "trustedTesters" is no longer an API option: the audience is set by the item\'s Distribution settings in the Developer Dashboard. Publishing as "default".',
     );
   }

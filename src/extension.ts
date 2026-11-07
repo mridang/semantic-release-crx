@@ -1,9 +1,11 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { zipSync } from 'fflate';
 // @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
+import { isRecord } from './utils/object.js';
+import { toPosixPath } from './utils/path.js';
 import { toManifestVersion } from './version.js';
 
 const DOS_EPOCH_1980 = Date.UTC(1980, 0, 1);
@@ -57,12 +59,7 @@ export class Extension {
       });
       const errors: ParseError[] = [];
       const parsed: unknown = parse(text, errors, { allowTrailingComma: true });
-      if (
-        errors.length > 0 ||
-        typeof parsed !== 'object' ||
-        parsed === null ||
-        Array.isArray(parsed)
-      ) {
+      if (errors.length > 0 || !isRecord(parsed)) {
         throw new SemanticReleaseError(
           `The manifest at "${path}" is not a valid JSON object.`,
           'EINVALIDMANIFEST',
@@ -154,7 +151,7 @@ export class Extension {
         paths.map(
           async (path) =>
             [
-              relative(root, path).split(sep).join('/'),
+              toPosixPath(relative(root, path)),
               new Uint8Array(await readFile(path)),
             ] as const,
         ),

@@ -1,5 +1,8 @@
 // @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
+import { readEnv } from './utils/env.js';
+import { isPercentage } from './utils/math.js';
+import { isRecord } from './utils/object.js';
 
 /**
  * The audience a submission is published to. `default` and `trustedTesters`
@@ -181,7 +184,7 @@ export function resolveExtensionId(
   if (typeof extensionId === 'string' && extensionId !== '') {
     return { id: extensionId };
   }
-  if (typeof extensionId === 'object' && extensionId !== null) {
+  if (isRecord(extensionId)) {
     const branch = context.branch?.name;
     const id =
       branch !== undefined && Object.hasOwn(extensionId, branch)
@@ -217,7 +220,7 @@ export function resolvePublisherId(
 ): { id: string } | { error: Error } {
   const id =
     config.publisherId?.trim() ||
-    (context.env ?? process.env).CHROME_PUBLISHER_ID?.trim();
+    readEnv(context.env ?? process.env, 'CHROME_PUBLISHER_ID');
   return id
     ? { id }
     : {
@@ -269,12 +272,7 @@ export function validateConfig(
     ...(['deployPercentage', 'promoteDeployPercentage'] as const).flatMap(
       (name) => {
         const percentage = config[name];
-        return percentage !== undefined &&
-          !(
-            Number.isInteger(percentage) &&
-            percentage >= 0 &&
-            percentage <= 100
-          )
+        return percentage !== undefined && !isPercentage(percentage)
           ? [
               new SemanticReleaseError(
                 `Option '${name}' must be a whole number between 0 and 100.`,

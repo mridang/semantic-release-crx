@@ -4,7 +4,6 @@ import {
   getAccessToken,
   request,
   resolveCredentials,
-  sleep,
 } from '../src/webstore.js';
 import { mockFetch } from './utils/fetch-mock.js';
 import {
@@ -757,14 +756,6 @@ describe('http', () => {
       await expect(
         request('https://x.test/a', {}, { timeoutMs: 20 }),
       ).rejects.toThrow(/aborted/);
-    });
-  });
-
-  describe('sleep', () => {
-    it('resolves after the delay', async () => {
-      const start = Date.now();
-      await sleep(15);
-      expect(Date.now() - start).toBeGreaterThanOrEqual(10);
     });
   });
 });

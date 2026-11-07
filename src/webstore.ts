@@ -1,7 +1,13 @@
-import { createSign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 // @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
+import { fromBase64 } from './utils/base64.js';
+import { readEnv } from './utils/env.js';
+import { signJwt } from './utils/jwt.js';
+import { isPercentage } from './utils/math.js';
+import { isRecord } from './utils/object.js';
+import { sleep } from './utils/sleep.js';
+import { nowSeconds } from './utils/time.js';
 
 export interface HttpResult {
   readonly status: number;
@@ -10,16 +16,6 @@ export interface HttpResult {
 }
 
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-
-/**
- * Wait for a number of milliseconds.
- *
- * @param ms Duration to wait.
- * @returns A promise that resolves after the delay.
- */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Perform a request and decode a JSON (or fall back to text) response. The
@@ -112,8 +108,8 @@ interface ServiceAccountKey {
 async function readServiceAccount(
   env: Env,
 ): Promise<Extract<Credentials, { kind: 'serviceAccount' }> | undefined> {
-  const inline = env.GOOGLE_SERVICE_ACCOUNT_KEY?.trim();
-  const path = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  const inline = readEnv(env, 'GOOGLE_SERVICE_ACCOUNT_KEY');
+  const path = readEnv(env, 'GOOGLE_APPLICATION_CREDENTIALS');
   if (!inline && !path) {
     return undefined;
   }
@@ -123,7 +119,7 @@ async function readServiceAccount(
   const raw = inline
     ? inline.startsWith('{')
       ? inline
-      : Buffer.from(inline, 'base64').toString('utf8')
+      : fromBase64(inline)
     : await readFile(path as string, 'utf8').catch(() => {
         throw new SemanticReleaseError(
           `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
@@ -172,13 +168,13 @@ async function readServiceAccount(
  * @throws An aggregate error naming everything that is missing.
  */
 export async function resolveCredentials(env: Env): Promise<Credentials> {
-  const accessToken = env.CHROME_ACCESS_TOKEN?.trim();
+  const accessToken = readEnv(env, 'CHROME_ACCESS_TOKEN');
   if (accessToken) {
     return { kind: 'accessToken', accessToken };
   }
-  const clientId = env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
-  const refreshToken = env.GOOGLE_REFRESH_TOKEN?.trim();
+  const clientId = readEnv(env, 'GOOGLE_CLIENT_ID');
+  const clientSecret = readEnv(env, 'GOOGLE_CLIENT_SECRET');
+  const refreshToken = readEnv(env, 'GOOGLE_REFRESH_TOKEN');
   if (refreshToken?.startsWith('{')) {
     throw new SemanticReleaseError(
       'GOOGLE_REFRESH_TOKEN contains a JSON object. Set it to the value of the "refresh_token" field only, not the whole token response.',
@@ -230,7 +226,7 @@ function tokenError(
   body: unknown,
   credentials: Credentials,
 ): Error {
-  const fields = (typeof body === 'object' && body !== null ? body : {}) as {
+  const fields = (isRecord(body) ? body : {}) as {
     error?: unknown;
     error_description?: unknown;
   };
@@ -256,42 +252,25 @@ function tokenError(
 }
 
 /**
- * Base64url encode.
- *
- * @param input Text or bytes.
- * @returns The URL safe base64 form without padding.
- */
-function base64url(input: string | Buffer): string {
-  return Buffer.from(input).toString('base64url');
-}
-
-/**
  * Build the signed assertion Google exchanges for a service account token.
  *
  * @param account Service account details.
- * @param nowSeconds Current time in seconds since the epoch.
  * @returns A compact RS256 JWT.
  */
 function signAssertion(
   account: Extract<Credentials, { kind: 'serviceAccount' }>,
-  nowSeconds: number,
 ): string {
-  const unsigned = [
-    base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })),
-    base64url(
-      JSON.stringify({
-        iss: account.clientEmail,
-        scope: CHROME_WEBSTORE_SCOPE,
-        aud: account.tokenUri,
-        iat: nowSeconds,
-        exp: nowSeconds + 3600,
-      }),
-    ),
-  ].join('.');
-  const signature = createSign('RSA-SHA256')
-    .update(unsigned)
-    .sign(account.privateKey);
-  return `${unsigned}.${base64url(signature)}`;
+  const iat = nowSeconds();
+  return signJwt(
+    {
+      iss: account.clientEmail,
+      scope: CHROME_WEBSTORE_SCOPE,
+      aud: account.tokenUri,
+      iat,
+      exp: iat + 3600,
+    },
+    account.privateKey,
+  );
 }
 
 /**
@@ -324,10 +303,7 @@ export async function getAccessToken(
           credentials.tokenUri,
           {
             grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-            assertion: signAssertion(
-              credentials,
-              Math.floor(Date.now() / 1000),
-            ),
+            assertion: signAssertion(credentials),
           },
         ];
   const response = await request(
@@ -474,9 +450,7 @@ const ACTION_HINTS: Readonly<Record<string, string>> = {
  * @returns An error to throw.
  */
 function failure(action: string, result: HttpResult): Error {
-  const envelope = (
-    typeof result.body === 'object' && result.body !== null ? result.body : {}
-  ) as {
+  const envelope = (isRecord(result.body) ? result.body : {}) as {
     error?: {
       message?: string;
       status?: string;
@@ -817,13 +791,7 @@ export async function setPublishedDeployPercentage(
   options: ConnectionOptions & { deployPercentage: number },
 ): Promise<void> {
   const { deployPercentage } = options;
-  if (
-    !(
-      Number.isInteger(deployPercentage) &&
-      deployPercentage >= 0 &&
-      deployPercentage <= 100
-    )
-  ) {
+  if (!isPercentage(deployPercentage)) {
     throw new SemanticReleaseError(
       'deployPercentage must be a whole number between 0 and 100.',
       'EINVALIDDEPLOYPERCENTAGE',
