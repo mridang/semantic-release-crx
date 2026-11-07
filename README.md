@@ -35,10 +35,11 @@ using workload identity federation.
 npm install --save-dev @mridang/semantic-release-crx
 ```
 
-Node.js 22 or newer is required. The only runtime dependencies are
-`@semantic-release/error` and `lodash` (for the `asset` template); HTTP uses
-the built in `fetch` and the zip file is written with `node:zlib`, so there are
-no native binaries.
+Node.js 22 or newer is required. The runtime dependencies are
+`@semantic-release/error`, `lodash` (for the `asset` template),
+`jsonc-parser` (to edit `manifest.json` in place) and `fflate` (to write the
+zip). All are pure JavaScript with no dependencies of their own, so there are
+no native binaries. HTTP uses the built in `fetch`.
 
 ## Usage
 
@@ -405,10 +406,11 @@ on:
 - **Upload processing is awaited.** Large packages are processed
   asynchronously; the plugin polls until the upload succeeds, fails or
   `pollTimeoutMs` passes, and only publishes after `SUCCEEDED`.
-- **Manifest editing.** Only the version members are edited, in place.
-  `semantic-release-chrome` re-serialised the file, which failed on comments
-  and lost formatting. Key order, comments and indentation are now preserved.
-- **Zip.** Written with `node:zlib` instead of `archiver`. The file is complete
+- **Manifest editing.** Only the version members are edited, in place, with
+  `jsonc-parser`. `semantic-release-chrome` re-serialised the file, which
+  failed on comments and lost formatting. Key order, comments, indentation and
+  line endings are now preserved.
+- **Zip.** Written with `fflate` instead of `archiver`. The file is complete
   on disk when `prepare` finishes, the archive is never added to itself, and
   the output is deterministic (sorted entries, fixed timestamps).
 - **Release link** is `https://chromewebstore.google.com/detail/<id>`.

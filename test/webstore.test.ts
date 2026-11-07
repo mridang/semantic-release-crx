@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 // noinspection ES6PreferShortImport
-import { WebStoreClient } from '../src/webstore-client.js';
+import { WebStoreClient } from '../src/webstore.js';
 import { mockFetch } from './utils/fetch-mock.js';
 
 afterEach(() => jest.restoreAllMocks());
@@ -322,5 +322,78 @@ describe('WebStoreClient promotion, cancel and rollback', () => {
         message: expect.stringContaining('10,000 seven-day active users'),
       },
     );
+  });
+});
+
+describe('WebStoreClient.hasPendingSubmission', () => {
+  it('is true only while the submitted revision is pending review', async () => {
+    mockFetch({
+      [STATUS]: [
+        { json: { submittedItemRevisionStatus: { state: 'PENDING_REVIEW' } } },
+        { json: { submittedItemRevisionStatus: { state: 'PUBLISHED' } } },
+        { json: {} },
+      ],
+    });
+    expect(await make().hasPendingSubmission()).toBe(true);
+    expect(await make().hasPendingSubmission()).toBe(false);
+    expect(await make().hasPendingSubmission()).toBe(false);
+  });
+});
+
+describe('WebStoreClient.submit', () => {
+  const policy = { ignoredWarnings: ['IGNORED'], failOnWarnings: true };
+  const reply = (json: unknown) => mockFetch({ [PUBLISH]: { json } });
+
+  it('returns the state and logs every warning', async () => {
+    const lines: string[] = [];
+    reply({
+      state: 'STAGED',
+      warningInfo: { warnings: [{ reason: 'IGNORED', description: 'fine' }] },
+    });
+    expect(
+      await make(lines).submit({ publishType: 'STAGED_PUBLISH' }, policy),
+    ).toBe('STAGED');
+    expect(lines).toEqual(['IGNORED: fine']);
+  });
+
+  it('fails once per blocking warning only when failOnWarnings is set', async () => {
+    const body = {
+      state: 'PENDING_REVIEW',
+      warningInfo: {
+        warnings: [{ reason: 'A', description: 'a' }, { reason: 'B' }],
+      },
+    };
+    reply(body);
+    await expect(
+      make().submit({ publishType: 'DEFAULT_PUBLISH' }, policy),
+    ).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({ code: 'A' }),
+        expect.objectContaining({ code: 'B', message: 'Warning' }),
+      ],
+    });
+    expect(
+      await make().submit(
+        { publishType: 'DEFAULT_PUBLISH' },
+        { ...policy, failOnWarnings: false },
+      ),
+    ).toBe('PENDING_REVIEW');
+  });
+
+  it('rejects states the store did not accept', async () => {
+    for (const state of [
+      'REJECTED',
+      'CANCELLED',
+      'ITEM_STATE_UNSPECIFIED',
+      undefined,
+    ]) {
+      reply({ state });
+      await expect(
+        make().submit({ publishType: 'DEFAULT_PUBLISH' }, policy),
+      ).rejects.toMatchObject({
+        code: 'EPUBLISHSTATE',
+      });
+      jest.restoreAllMocks();
+    }
   });
 });

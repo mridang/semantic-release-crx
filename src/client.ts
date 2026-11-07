@@ -4,7 +4,7 @@ import {
   WebStoreClient,
   type RollbackRequest,
   type StatusResponse,
-} from './webstore-client.js';
+} from './webstore.js';
 
 export type { RollbackRequest, StatusResponse };
 

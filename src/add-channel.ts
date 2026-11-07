@@ -12,7 +12,7 @@ import {
   resolvePublisherId,
   validateConfig,
 } from './settings.js';
-import { WebStoreClient } from './webstore-client.js';
+import { WebStoreClient } from './webstore.js';
 
 /**
  * semantic-release `addChannel` step, run when an existing release is

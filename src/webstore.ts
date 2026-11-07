@@ -1,4 +1,4 @@
-import { crxError } from './errors.js';
+import { aggregate, crxError } from './errors.js';
 import { request, sleep, type HttpResult } from './http.js';
 
 const API = 'https://chromewebstore.googleapis.com';
@@ -77,6 +77,13 @@ export interface ClientOptions {
   readonly pollTimeoutMs: number;
   readonly log?: (message: string) => void;
 }
+
+const ACCEPTED_STATES: readonly ItemState[] = [
+  'PENDING_REVIEW',
+  'STAGED',
+  'PUBLISHED',
+  'PUBLISHED_TO_TESTERS',
+];
 
 const HINTS: Record<number, [string, string]> = {
   400: [
@@ -277,6 +284,68 @@ export class WebStoreClient {
       headers: this.headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     })) as PublishResponse;
+  }
+
+  /**
+   * Whether an earlier submission is still waiting for review, which can make
+   * the store refuse a new upload or submission.
+   *
+   * @returns True when the item's submitted revision is `PENDING_REVIEW`.
+   */
+  async hasPendingSubmission(): Promise<boolean> {
+    return (
+      (await this.fetchStatus()).submittedItemRevisionStatus?.state ===
+      'PENDING_REVIEW'
+    );
+  }
+
+  /**
+   * Submit the uploaded package and judge the answer. Every warning is logged.
+   * A warning that is not in `ignoredWarnings` fails the call when
+   * `failOnWarnings` is set, and so does a state other than pending review,
+   * staged or published. Both checks happen after the store has accepted the
+   * request, so a failure here can leave a submission in place.
+   *
+   * @param body Publish options.
+   * @param policy Which warnings are ignored and whether others are fatal.
+   * @returns The state of the submission.
+   * @throws With `EPUBLISHSTATE` for an unacceptable state, or one error per
+   * blocking warning.
+   */
+  async submit(
+    body: PublishRequest,
+    policy: {
+      readonly ignoredWarnings: readonly string[];
+      readonly failOnWarnings: boolean;
+    },
+  ): Promise<ItemState> {
+    const result = await this.publish(body);
+    const warnings = result.warningInfo?.warnings ?? [];
+    warnings.forEach((warning) =>
+      this.options.log?.(
+        `${warning.reason ?? 'WARNING'}: ${warning.description ?? ''}`,
+      ),
+    );
+    const blocking = warnings.filter(
+      (warning) => !policy.ignoredWarnings.includes(warning.reason ?? ''),
+    );
+    if (policy.failOnWarnings && blocking.length > 0) {
+      throw aggregate(
+        blocking.map((warning) =>
+          crxError(
+            warning.description ?? 'Warning',
+            warning.reason ?? 'EWARNING',
+          ),
+        ),
+      );
+    }
+    if (!result.state || !ACCEPTED_STATES.includes(result.state)) {
+      throw crxError(
+        `Chrome Web Store did not accept the submission (state ${result.state ?? 'unknown'}). Open the item in the Developer Dashboard to see why.`,
+        'EPUBLISHSTATE',
+      );
+    }
+    return result.state;
   }
 
   private async postJson(

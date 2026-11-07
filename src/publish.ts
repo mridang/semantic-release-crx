@@ -16,14 +16,7 @@ import {
   validateConfig,
 } from './settings.js';
 import { toManifestVersion } from './version.js';
-import { WebStoreClient, type ItemState } from './webstore-client.js';
-
-const ACCEPTED_STATES: ItemState[] = [
-  'PENDING_REVIEW',
-  'STAGED',
-  'PUBLISHED',
-  'PUBLISHED_TO_TESTERS',
-];
+import { WebStoreClient } from './webstore.js';
 
 interface ReleaseLink {
   readonly name: string;
@@ -50,16 +43,18 @@ async function handlePendingSubmission(
   logger: Logger,
 ): Promise<boolean> {
   const warn = logger.warn ?? logger.log;
-  const status = await client.fetchStatus().catch((error: unknown) => {
-    if (config.cancelPendingSubmission) {
-      throw error;
-    }
-    warn(
-      `Could not check for a pending submission: ${(error as Error).message}`,
-    );
-    return undefined;
-  });
-  if (status?.submittedItemRevisionStatus?.state !== 'PENDING_REVIEW') {
+  const pending = await client
+    .hasPendingSubmission()
+    .catch((error: unknown) => {
+      if (config.cancelPendingSubmission) {
+        throw error;
+      }
+      warn(
+        `Could not check for a pending submission: ${(error as Error).message}`,
+      );
+      return false;
+    });
+  if (!pending) {
     return false;
   }
   if (!config.cancelPendingSubmission) {
@@ -177,45 +172,27 @@ export async function publish(
     );
   }
   logger.log('Publishing extension to the Chrome Web Store...');
-  const result = await client
-    .publish({
-      publishType:
-        config.target === 'staged' ? 'STAGED_PUBLISH' : 'DEFAULT_PUBLISH',
-      ...(config.deployPercentage === undefined
-        ? {}
-        : { deployInfos: [{ deployPercentage: config.deployPercentage }] }),
-      ...(config.skipReview ? { skipReview: true } : {}),
-      ...(config.failOnWarnings && config.ignoredWarnings?.length === 0
-        ? { blockOnWarnings: true }
-        : {}),
-    })
+  const state = await client
+    .submit(
+      {
+        publishType:
+          config.target === 'staged' ? 'STAGED_PUBLISH' : 'DEFAULT_PUBLISH',
+        ...(config.deployPercentage === undefined
+          ? {}
+          : { deployInfos: [{ deployPercentage: config.deployPercentage }] }),
+        ...(config.skipReview ? { skipReview: true } : {}),
+        ...(config.failOnWarnings && config.ignoredWarnings?.length === 0
+          ? { blockOnWarnings: true }
+          : {}),
+      },
+      {
+        ignoredWarnings: config.ignoredWarnings ?? DEFAULT_IGNORED_WARNINGS,
+        failOnWarnings: Boolean(config.failOnWarnings),
+      },
+    )
     .catch((error: unknown) => addPendingHint(error, pending, config));
-  const ignored = config.ignoredWarnings ?? DEFAULT_IGNORED_WARNINGS;
-  const warnings = result.warningInfo?.warnings ?? [];
-  const blocking = warnings.filter(
-    (warning) => !ignored.includes(warning.reason ?? ''),
-  );
-  warnings.forEach((warning) =>
-    logger.log(`${warning.reason ?? 'WARNING'}: ${warning.description ?? ''}`),
-  );
-  if (config.failOnWarnings && blocking.length > 0) {
-    throw aggregate(
-      blocking.map((warning) =>
-        crxError(
-          warning.description ?? 'Warning',
-          warning.reason ?? 'EWARNING',
-        ),
-      ),
-    );
-  }
-  if (!result.state || !ACCEPTED_STATES.includes(result.state)) {
-    throw crxError(
-      `Chrome Web Store did not accept the submission (state ${result.state ?? 'unknown'}). Open the item in the Developer Dashboard to see why.`,
-      'EPUBLISHSTATE',
-    );
-  }
   logger.log(
-    `Successfully published extension to the Chrome Web Store (state ${result.state})`,
+    `Successfully published extension to the Chrome Web Store (state ${state})`,
   );
   return link;
 }

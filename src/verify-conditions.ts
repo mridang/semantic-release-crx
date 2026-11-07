@@ -11,7 +11,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_POLL_TIMEOUT_MS,
 } from './plugin-config.js';
-import { WebStoreClient } from './webstore-client.js';
+import { WebStoreClient } from './webstore.js';
 
 /**
  * semantic-release `verifyConditions` step. Checks the configuration, finds
