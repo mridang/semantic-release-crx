@@ -288,3 +288,39 @@ describe('WebStoreClient polling edge cases', () => {
     expect(published(calls)).toBe(false);
   });
 });
+
+describe('WebStoreClient promotion, cancel and rollback', () => {
+  it('uses the V2 operation URLs and JSON bodies', async () => {
+    const calls = mockFetch({
+      [`POST ${BASE}/v2/${ITEM}:cancelSubmission`]: { json: {} },
+      [`POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`]: { json: {} },
+      [`POST ${BASE}/v2/${ITEM}:rollback`]: { json: {} },
+    });
+    const client = make();
+    await client.cancelSubmission();
+    await client.setPublishedDeployPercentage(40);
+    await client.rollback({ rollbackReason: 'r', newVersion: '2' });
+    expect(calls.map((c) => [c.url.split(':').pop(), c.body])).toEqual([
+      ['cancelSubmission', {}],
+      ['setPublishedDeployPercentage', { deployPercentage: 40 }],
+      ['rollback', { rollbackReason: 'r', newVersion: '2' }],
+    ]);
+    expect(
+      calls.every((c) => c.headers['Content-Type'] === 'application/json'),
+    ).toBe(true);
+  });
+
+  it('adds the precondition hint for a 403 as well', async () => {
+    mockFetch({
+      [`POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`]: {
+        status: 403,
+        json: { error: { message: 'no' } },
+      },
+    });
+    await expect(make().setPublishedDeployPercentage(10)).rejects.toMatchObject(
+      {
+        message: expect.stringContaining('10,000 seven-day active users'),
+      },
+    );
+  });
+});

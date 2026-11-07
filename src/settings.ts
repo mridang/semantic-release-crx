@@ -108,17 +108,19 @@ export function validateConfig(
       ),
     );
   }
-  const percentage = config.deployPercentage;
-  if (
-    percentage !== undefined &&
-    !(Number.isInteger(percentage) && percentage >= 0 && percentage <= 100)
-  ) {
-    problems.push(
-      crxError(
-        "Option 'deployPercentage' must be a whole number between 0 and 100.",
-        'EINVALIDDEPLOYPERCENTAGE',
-      ),
-    );
-  }
+  (['deployPercentage', 'promoteDeployPercentage'] as const).forEach((name) => {
+    const percentage = config[name];
+    if (
+      percentage !== undefined &&
+      !(Number.isInteger(percentage) && percentage >= 0 && percentage <= 100)
+    ) {
+      problems.push(
+        crxError(
+          `Option '${name}' must be a whole number between 0 and 100.`,
+          'EINVALIDDEPLOYPERCENTAGE',
+        ),
+      );
+    }
+  });
   return problems;
 }

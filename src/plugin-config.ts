@@ -72,6 +72,19 @@ export interface CrxPluginConfig {
   deployPercentage?: number;
 
   /**
+   * Cancel a submission that is still waiting for review before uploading, so
+   * a new release is not refused because of it. Off by default.
+   */
+  cancelPendingSubmission?: boolean;
+
+  /**
+   * Rollout percentage (0 to 100) to raise the published revision to when
+   * semantic-release promotes a release to another channel (`addChannel`).
+   * Nothing happens when unset.
+   */
+  promoteDeployPercentage?: number;
+
+  /**
    * Ask the store to skip review when the item qualifies.
    */
   skipReview?: boolean;

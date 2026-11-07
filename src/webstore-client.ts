@@ -50,13 +50,24 @@ export interface PublishResponse {
   warningInfo?: { warnings?: { reason?: string; description?: string }[] };
 }
 
+export interface RollbackRequest {
+  /** Why the rollback is made; shown in the Developer Dashboard. */
+  rollbackReason: string;
+  /** The version to assign to the package being rolled back to. */
+  newVersion: string;
+  /** The previously published version to roll back to. */
+  targetCrxVersion?: string;
+  /** Validate only, without starting the rollback. */
+  validateOnly?: boolean;
+}
+
 export interface ClientOptions {
   publisherId: string;
   extensionId: string;
   accessToken: string;
   pollIntervalMs: number;
   pollTimeoutMs: number;
-  log: (message: string) => void;
+  log?: (message: string) => void;
 }
 
 const HINTS: Record<number, [string, string]> = {
@@ -76,6 +87,15 @@ const HINTS: Record<number, [string, string]> = {
     'EWEBSTORENOTFOUND',
     'The item was not found. Check publisherId and extensionId. The item must already exist (create a draft in the Developer Dashboard first).',
   ],
+};
+
+const ACTION_HINTS: Record<string, string> = {
+  'cancel submission':
+    'Only an item with an active submission can be cancelled.',
+  'deploy percentage update':
+    'The percentage must be larger than the current target percentage, and the store only allows this for items with over 10,000 seven-day active users.',
+  rollback:
+    'newVersion must be higher than the currently published version, rollbackReason is required, and targetCrxVersion must be a previously published version.',
 };
 
 /**
@@ -111,7 +131,11 @@ function failure(action: string, result: HttpResult): Error {
   return crxError(
     `Chrome Web Store ${action} failed with HTTP ${result.status}${
       detail?.status ? ` ${detail.status}` : ''
-    }: ${text}${reasons.length ? ` (${reasons.join(', ')})` : ''}. ${hint}`,
+    }: ${text}${reasons.length ? ` (${reasons.join(', ')})` : ''}. ${hint}${
+      result.status === 400 || result.status === 403
+        ? ` ${ACTION_HINTS[action] ?? ''}`.trimEnd()
+        : ''
+    }`,
     code,
   );
 }
@@ -190,7 +214,7 @@ export class WebStoreClient {
       return response;
     }
     if (response.uploadState === 'IN_PROGRESS') {
-      this.options.log(
+      this.options.log?.(
         'Upload is being processed, waiting for it to finish...',
       );
       await this.waitForUpload();
@@ -242,5 +266,52 @@ export class WebStoreClient {
       headers: this.headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     })) as PublishResponse;
+  }
+
+  private async postJson(
+    action: string,
+    operation: string,
+    body: unknown,
+  ): Promise<unknown> {
+    return this.call(action, `${API}/v2/${this.name}:${operation}`, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Cancel the item's active submission (`items.cancelSubmission`), for
+   * example one that is still waiting for review.
+   */
+  async cancelSubmission(): Promise<void> {
+    await this.postJson('cancel submission', 'cancelSubmission', {});
+  }
+
+  /**
+   * Raise the rollout of the published revision
+   * (`items.setPublishedDeployPercentage`) without a new review. The store
+   * requires the value to be larger than the current target and only allows
+   * it for items with over 10,000 seven-day active users.
+   *
+   * @param deployPercentage Whole number between 0 and 100.
+   */
+  async setPublishedDeployPercentage(deployPercentage: number): Promise<void> {
+    await this.postJson(
+      'deploy percentage update',
+      'setPublishedDeployPercentage',
+      {
+        deployPercentage,
+      },
+    );
+  }
+
+  /**
+   * Roll the published package back to an earlier one (`items.rollback`).
+   *
+   * @param body Rollback request.
+   */
+  async rollback(body: RollbackRequest): Promise<void> {
+    await this.postJson('rollback', 'rollback', body);
   }
 }
