@@ -1,25 +1,31 @@
-// @ts-expect-error since this is not typed
+import type { VerifyConditionsContext } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { readEnv } from './utils/env.js';
 import { isPercentage } from './utils/math.js';
 import { isRecord } from './utils/object.js';
+import { isOneOf } from './utils/union.js';
+
+const PUBLISH_TARGETS = [
+  'default',
+  'trustedTesters',
+  'draft',
+  'local',
+  'staged',
+] as const;
 
 /**
  * The audience a submission is published to. `default` and `trustedTesters`
  * are the original plugin's values; `staged` is new in the V2 API.
  */
-export type PublishTarget =
-  | 'default'
-  | 'trustedTesters'
-  | 'draft'
-  | 'local'
-  | 'staged';
+export type PublishTarget = (typeof PUBLISH_TARGETS)[number];
+
+const PRERELEASE_MODES = ['convert', 'skip', 'reject'] as const;
 
 /**
  * What to do when the version being released is a semver pre-release such as
  * `1.2.3-beta.4`.
  */
-export type PrereleaseMode = 'convert' | 'skip' | 'reject';
+export type PrereleaseMode = (typeof PRERELEASE_MODES)[number];
 
 export interface CrxPluginConfig {
   /**
@@ -120,30 +126,12 @@ export interface CrxPluginConfig {
 }
 
 /**
- * The parts of the semantic-release step context this plugin reads.
- */
-export interface StepContext {
-  readonly cwd?: string;
-  readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly logger: {
-    readonly log: (...args: unknown[]) => void;
-    readonly warn?: (...args: unknown[]) => void;
-  };
-  readonly branch?: {
-    readonly name?: string;
-    readonly prerelease?: string | boolean;
-    readonly [k: string]: unknown;
-  };
-  readonly lastRelease?: Record<string, unknown>;
-  readonly nextRelease?: { version?: string; readonly [k: string]: unknown };
-  readonly commits?: readonly unknown[];
-}
-
-/**
  * Warning reasons ignored unless configured otherwise. This is the whitelist
  * carried over from the original plugin.
  */
-export const DEFAULT_IGNORED_WARNINGS = ['PUBLISHED_WITH_FRICTION_WARNING'];
+export const DEFAULT_IGNORED_WARNINGS: readonly string[] = [
+  'PUBLISHED_WITH_FRICTION_WARNING',
+];
 
 export const DEFAULT_DIST_FOLDER = 'dist';
 
@@ -164,9 +152,12 @@ export function manifestPathOf(config: CrxPluginConfig): string {
   );
 }
 
-const TARGETS = ['default', 'trustedTesters', 'draft', 'local', 'staged'];
-
-const PRERELEASE_MODES = ['convert', 'skip', 'reject'];
+/**
+ * The outcome of looking an identifier up: the value, or why it is missing.
+ */
+type Lookup =
+  | { readonly ok: true; readonly id: string }
+  | { readonly ok: false; readonly error: SemanticReleaseError };
 
 /**
  * Pick the item ID for the branch being released. A plain string applies to
@@ -178,11 +169,11 @@ const PRERELEASE_MODES = ['convert', 'skip', 'reject'];
  */
 export function resolveExtensionId(
   config: CrxPluginConfig,
-  context: StepContext,
-): { id: string } | { error: Error } {
+  context: Pick<VerifyConditionsContext, 'branch'>,
+): Lookup {
   const { extensionId } = config;
   if (typeof extensionId === 'string' && extensionId !== '') {
-    return { id: extensionId };
+    return { ok: true, id: extensionId };
   }
   if (isRecord(extensionId)) {
     const branch = context.branch?.name;
@@ -191,8 +182,9 @@ export function resolveExtensionId(
         ? extensionId[branch]
         : undefined;
     return id
-      ? { id }
+      ? { ok: true, id }
       : {
+          ok: false,
           error: new SemanticReleaseError(
             `Option 'extensionId' maps branches to extension IDs, but has no entry for the branch "${branch ?? 'unknown'}". Add one, or use a single extensionId. Check the README.md for config info.`,
             'EEXTENSIONIDBRANCH',
@@ -200,6 +192,7 @@ export function resolveExtensionId(
         };
   }
   return {
+    ok: false,
     error: new SemanticReleaseError(
       "Option 'extensionId' was not included in the config. Check the README.md for config info.",
       'ENOEXTENSIONID',
@@ -216,14 +209,15 @@ export function resolveExtensionId(
  */
 export function resolvePublisherId(
   config: CrxPluginConfig,
-  context: StepContext,
-): { id: string } | { error: Error } {
+  context: Pick<VerifyConditionsContext, 'env'>,
+): Lookup {
   const id =
     config.publisherId?.trim() ||
     readEnv(context.env ?? process.env, 'CHROME_PUBLISHER_ID');
   return id
-    ? { id }
+    ? { ok: true, id }
     : {
+        ok: false,
         error: new SemanticReleaseError(
           "Option 'publisherId' was not included in the config. The Chrome Web Store API V2 needs it: open the Chrome Web Store Developer Dashboard (https://chrome.google.com/webstore/devconsole), choose Account, and copy the Publisher ID. You can also set the CHROME_PUBLISHER_ID environment variable.",
           'ENOPUBLISHERID',
@@ -235,7 +229,6 @@ export function resolvePublisherId(
  * Validate the options that do not need the network.
  *
  * @param config Plugin configuration.
- * @param context Step context.
  * @param requireAsset Whether `asset` is mandatory for this step.
  * @returns Every problem found, so they can be reported together.
  */
@@ -243,6 +236,8 @@ export function validateConfig(
   config: CrxPluginConfig,
   requireAsset: boolean,
 ): readonly Error[] {
+  const target: unknown = config.target;
+  const prerelease: unknown = config.prerelease;
   return [
     ...(requireAsset && !config.asset
       ? [
@@ -252,19 +247,18 @@ export function validateConfig(
           ),
         ]
       : []),
-    ...(config.target !== undefined && !TARGETS.includes(config.target)
+    ...(target !== undefined && !isOneOf(PUBLISH_TARGETS, target)
       ? [
           new SemanticReleaseError(
-            `Option 'target' must be one of ${TARGETS.join(', ')}, not "${String(config.target)}".`,
+            `Option 'target' must be one of ${PUBLISH_TARGETS.join(', ')}, not "${String(target)}".`,
             'EINVALIDTARGET',
           ),
         ]
       : []),
-    ...(config.prerelease !== undefined &&
-    !PRERELEASE_MODES.includes(config.prerelease)
+    ...(prerelease !== undefined && !isOneOf(PRERELEASE_MODES, prerelease)
       ? [
           new SemanticReleaseError(
-            `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${String(config.prerelease)}".`,
+            `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${String(prerelease)}".`,
             'EINVALIDPRERELEASE',
           ),
         ]
@@ -291,8 +285,6 @@ export function validateConfig(
  * @param results Results of `resolveExtensionId` or `resolvePublisherId`.
  * @returns The errors among them, in order.
  */
-export function errorsOf(
-  ...results: readonly ({ id: string } | { error: Error })[]
-): readonly Error[] {
-  return results.flatMap((result) => ('error' in result ? [result.error] : []));
+export function errorsOf(...results: readonly Lookup[]): readonly Error[] {
+  return results.flatMap((result) => (result.ok ? [] : [result.error]));
 }

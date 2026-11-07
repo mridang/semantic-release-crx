@@ -914,3 +914,99 @@ describe('client', () => {
     });
   });
 });
+
+describe('WebStoreClient response parsing', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('keeps well-formed status fields, including distribution channels', async () => {
+    mockFetch({
+      [STATUS]: {
+        json: {
+          lastAsyncUploadState: 'SUCCEEDED',
+          submittedItemRevisionStatus: { state: 'PENDING_REVIEW' },
+          publishedItemRevisionStatus: {
+            state: 'PUBLISHED',
+            distributionChannels: [
+              { deployPercentage: 50, crxVersion: '1.2.3' },
+              'junk',
+            ],
+          },
+          takenDown: false,
+          warned: true,
+        },
+      },
+    });
+    const status = await make().fetchStatus();
+    expect(status.lastAsyncUploadState).toBe('SUCCEEDED');
+    expect(status.submittedItemRevisionStatus?.state).toBe('PENDING_REVIEW');
+    expect(status.publishedItemRevisionStatus?.distributionChannels).toEqual([
+      { deployPercentage: 50, crxVersion: '1.2.3' },
+    ]);
+    expect(status.takenDown).toBe(false);
+    expect(status.warned).toBe(true);
+  });
+
+  it('drops values of the wrong type or outside the enum rather than trusting them', async () => {
+    mockFetch({
+      [STATUS]: {
+        json: {
+          lastAsyncUploadState: 'MAYBE',
+          submittedItemRevisionStatus: 'nope',
+          publishedItemRevisionStatus: { state: 7, distributionChannels: 'x' },
+          takenDown: 'yes',
+          warned: 1,
+        },
+      },
+    });
+    const status = await make().fetchStatus();
+    expect(status.lastAsyncUploadState).toBeUndefined();
+    expect(status.submittedItemRevisionStatus).toBeUndefined();
+    expect(status.publishedItemRevisionStatus?.state).toBeUndefined();
+    expect(
+      status.publishedItemRevisionStatus?.distributionChannels,
+    ).toBeUndefined();
+    expect(status.takenDown).toBeUndefined();
+    expect(status.warned).toBeUndefined();
+  });
+
+  it('treats a non-object body as an empty response', async () => {
+    mockFetch({ [STATUS]: { text: '"just a string"' } });
+    expect(await make().fetchStatus()).toEqual({});
+  });
+
+  it('keeps only well-formed publish warnings', async () => {
+    mockFetch({
+      [PUBLISH]: {
+        json: {
+          state: 'PENDING_REVIEW',
+          warningInfo: {
+            warnings: [{ reason: 'A', description: 'a' }, 5, { reason: 2 }],
+          },
+        },
+      },
+    });
+    const result = await make().publish({ publishType: 'DEFAULT_PUBLISH' });
+    expect(result.warningInfo?.warnings).toEqual([
+      { reason: 'A', description: 'a' },
+      { reason: undefined, description: undefined },
+    ]);
+  });
+
+  it('reads error details that are not all objects', async () => {
+    mockFetch({
+      [UPLOAD]: {
+        status: 400,
+        json: {
+          error: {
+            message: 'bad',
+            details: [{ reason: 'R1' }, 'x', { reason: 3 }],
+          },
+        },
+      },
+    });
+    const error = await make()
+      .upload(Buffer.from('z'))
+      .catch((e: unknown) => e as Error);
+    expect((error as Error).message).toContain('(R1)');
+  });
+});

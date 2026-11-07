@@ -1,4 +1,3 @@
-// @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
 
 export interface ManifestVersion {

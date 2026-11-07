@@ -14,7 +14,12 @@ import {
 } from './utils/context.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
-import { type StepContext } from '../src/plugin-config.js';
+import type {
+  AddChannelContext,
+  PrepareContext,
+  PublishContext,
+  VerifyConditionsContext,
+} from 'semantic-release';
 import {
   addChannel,
   prepare,
@@ -57,7 +62,7 @@ describe('plugin entry point', () => {
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
         });
         const { context } = stepContext({ cwd: dir });
-        const ctx = context as unknown as StepContext;
+        const ctx = context as unknown as PublishContext;
         await plugin.verifyConditions(CONFIG, ctx);
         await plugin.prepare(CONFIG, ctx);
         const release = await plugin.publish(CONFIG, ctx);
@@ -140,7 +145,7 @@ describe('verifyConditions', () => {
       lines,
       result: verifyConditions(
         { ...CONFIG, ...config },
-        context as unknown as StepContext,
+        context as unknown as VerifyConditionsContext,
       ),
     };
   };
@@ -300,7 +305,7 @@ describe('prepare', () => {
       lines,
       result: prepare(
         { ...CONFIG, ...config },
-        context as unknown as StepContext,
+        context as unknown as PrepareContext,
       ),
     };
   };
@@ -501,7 +506,7 @@ describe('publish', () => {
       lines,
       result: publish(
         { ...CONFIG, ...config },
-        context as unknown as StepContext,
+        context as unknown as PublishContext,
       ),
     };
   };
@@ -1098,7 +1103,7 @@ describe('addChannel', () => {
       lines,
       result: addChannel(
         { ...CONFIG, ...config },
-        context as unknown as StepContext,
+        context as unknown as AddChannelContext,
       ),
     };
   };

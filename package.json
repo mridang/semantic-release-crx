@@ -73,6 +73,7 @@
     "@types/jest": "^30.0.0",
     "@types/lodash": "^4.17.0",
     "@types/node": "^22.18.12",
+    "@types/semantic-release__error": "^3.0.3",
     "eslint": "^9.39.4",
     "jest": "^30.0.3",
     "jest-junit": "^17.0.0",

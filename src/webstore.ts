@@ -1,12 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-// @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
 import { fromBase64 } from './utils/base64.js';
+import { messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
 import { signJwt } from './utils/jwt.js';
 import { isPercentage } from './utils/math.js';
-import { isRecord } from './utils/object.js';
+import { booleanAt, isRecord, numberAt, stringAt } from './utils/object.js';
+import { isOneOf } from './utils/union.js';
 import { nowSeconds } from './utils/time.js';
 
 export interface HttpResult {
@@ -44,9 +45,9 @@ export async function request(
         signal: AbortSignal.timeout(timeoutMs),
       });
       const text = await response.text();
-      const body = (() => {
+      const body = ((): unknown => {
         try {
-          return text === '' ? undefined : (JSON.parse(text) as unknown);
+          return text === '' ? undefined : JSON.parse(text);
         } catch {
           return text.slice(0, 500);
         }
@@ -97,6 +98,22 @@ interface ServiceAccountKey {
 }
 
 /**
+ * Read the fields of a service account key out of untrusted JSON.
+ *
+ * @param value Parsed JSON.
+ * @returns The fields that are strings; the rest are left undefined.
+ */
+function parseServiceAccountKey(value: unknown): ServiceAccountKey {
+  const record = isRecord(value) ? value : {};
+  return {
+    type: stringAt(record, 'type'),
+    client_email: stringAt(record, 'client_email'),
+    private_key: stringAt(record, 'private_key'),
+    token_uri: stringAt(record, 'token_uri'),
+  };
+}
+
+/**
  * Read a service account key from the environment. `GOOGLE_SERVICE_ACCOUNT_KEY`
  * holds the key JSON, optionally base64 encoded so it survives CI secret
  * stores, and `GOOGLE_APPLICATION_CREDENTIALS` holds the path of a key file.
@@ -110,25 +127,29 @@ async function readServiceAccount(
 ): Promise<Extract<Credentials, { kind: 'serviceAccount' }> | undefined> {
   const inline = readEnv(env, 'GOOGLE_SERVICE_ACCOUNT_KEY');
   const path = readEnv(env, 'GOOGLE_APPLICATION_CREDENTIALS');
-  if (!inline && !path) {
+  const source =
+    inline === undefined
+      ? 'GOOGLE_APPLICATION_CREDENTIALS'
+      : 'GOOGLE_SERVICE_ACCOUNT_KEY';
+  const raw =
+    inline !== undefined
+      ? inline.startsWith('{')
+        ? inline
+        : fromBase64(inline)
+      : path !== undefined
+        ? await readFile(path, 'utf8').catch(() => {
+            throw new SemanticReleaseError(
+              `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
+              'ESERVICEACCOUNT',
+            );
+          })
+        : undefined;
+  if (raw === undefined) {
     return undefined;
   }
-  const source = inline
-    ? 'GOOGLE_SERVICE_ACCOUNT_KEY'
-    : 'GOOGLE_APPLICATION_CREDENTIALS';
-  const raw = inline
-    ? inline.startsWith('{')
-      ? inline
-      : fromBase64(inline)
-    : await readFile(path as string, 'utf8').catch(() => {
-        throw new SemanticReleaseError(
-          `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
-          'ESERVICEACCOUNT',
-        );
-      });
-  const key = (() => {
+  const key = ((): ServiceAccountKey => {
     try {
-      return JSON.parse(raw) as ServiceAccountKey;
+      return parseServiceAccountKey(JSON.parse(raw));
     } catch {
       throw new SemanticReleaseError(
         `${source} does not contain valid JSON for a service account key.`,
@@ -226,20 +247,17 @@ function tokenError(
   body: unknown,
   credentials: Credentials,
 ): Error {
-  const fields = (isRecord(body) ? body : {}) as {
-    error?: unknown;
-    error_description?: unknown;
-  };
-  const reason = `${String(fields.error ?? status)}${
-    fields.error_description ? `: ${String(fields.error_description)}` : ''
-  }`;
-  if (fields.error === 'invalid_grant' && credentials.kind === 'oauth') {
+  const fields: Readonly<Record<string, unknown>> = isRecord(body) ? body : {};
+  const error = stringAt(fields, 'error');
+  const description = stringAt(fields, 'error_description');
+  const reason = `${error ?? status}${description ? `: ${description}` : ''}`;
+  if (error === 'invalid_grant' && credentials.kind === 'oauth') {
     return new SemanticReleaseError(
       `Google rejected GOOGLE_REFRESH_TOKEN (${reason}). The token was revoked or has expired. Refresh tokens issued while the OAuth consent screen is in "Testing" mode expire after 7 days, and tokens also expire after six months without use or when the Google account password changes. Set the consent screen to "In production" and generate a new refresh token, or avoid refresh tokens entirely with workload identity federation (see the README).`,
       'EREFRESHTOKEN',
     );
   }
-  if (fields.error === 'invalid_client') {
+  if (error === 'invalid_client') {
     return new SemanticReleaseError(
       `Google rejected the OAuth client (${reason}). Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.`,
       'EGOOGLECLIENT',
@@ -316,13 +334,14 @@ export async function getAccessToken(
     { retries: 2 },
   ).catch((error: unknown) => {
     throw new SemanticReleaseError(
-      `Could not reach Google to obtain an access token. ${(error as Error).message}`,
+      `Could not reach Google to obtain an access token. ${messageOf(error)}`,
       'EAUTH',
     );
   });
-  const token = (response.body as { access_token?: unknown } | undefined)
-    ?.access_token;
-  if (!response.ok || typeof token !== 'string' || token === '') {
+  const token = isRecord(response.body)
+    ? stringAt(response.body, 'access_token')
+    : undefined;
+  if (!response.ok || token === undefined || token === '') {
     throw tokenError(response.status, response.body, credentials);
   }
   return token;
@@ -330,21 +349,27 @@ export async function getAccessToken(
 
 const API = 'https://chromewebstore.googleapis.com';
 
-type UploadState =
-  | 'UPLOAD_STATE_UNSPECIFIED'
-  | 'SUCCEEDED'
-  | 'IN_PROGRESS'
-  | 'FAILED'
-  | 'NOT_FOUND';
+const UPLOAD_STATES = [
+  'UPLOAD_STATE_UNSPECIFIED',
+  'SUCCEEDED',
+  'IN_PROGRESS',
+  'FAILED',
+  'NOT_FOUND',
+] as const;
 
-export type ItemState =
-  | 'ITEM_STATE_UNSPECIFIED'
-  | 'PENDING_REVIEW'
-  | 'STAGED'
-  | 'PUBLISHED'
-  | 'PUBLISHED_TO_TESTERS'
-  | 'REJECTED'
-  | 'CANCELLED';
+type UploadState = (typeof UPLOAD_STATES)[number];
+
+const ITEM_STATES = [
+  'ITEM_STATE_UNSPECIFIED',
+  'PENDING_REVIEW',
+  'STAGED',
+  'PUBLISHED',
+  'PUBLISHED_TO_TESTERS',
+  'REJECTED',
+  'CANCELLED',
+] as const;
+
+export type ItemState = (typeof ITEM_STATES)[number];
 
 export interface UploadResponse {
   readonly uploadState?: UploadState;
@@ -396,6 +421,113 @@ export interface RollbackRequest {
   readonly validateOnly?: boolean;
 }
 
+/**
+ * Read a field that must be one of a fixed list of strings.
+ *
+ * @param values The allowed values.
+ * @param record The object to read from.
+ * @param key Property name.
+ * @returns The value when it is allowed, otherwise undefined.
+ */
+function enumAt<const T extends readonly string[]>(
+  values: T,
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+): T[number] | undefined {
+  const value = record[key];
+  return isOneOf(values, value) ? value : undefined;
+}
+
+/**
+ * Read an upload response, keeping only the fields the plugin understands.
+ *
+ * @param body Decoded response body.
+ * @returns The typed response; unknown or malformed fields are undefined.
+ */
+function parseUpload(body: unknown): UploadResponse {
+  const record = isRecord(body) ? body : {};
+  return {
+    uploadState: enumAt(UPLOAD_STATES, record, 'uploadState'),
+    crxVersion: stringAt(record, 'crxVersion'),
+    itemId: stringAt(record, 'itemId'),
+  };
+}
+
+/**
+ * Read the status of one item revision.
+ *
+ * @param value Decoded property of the status response.
+ * @returns The typed revision status, or undefined when absent.
+ */
+function parseRevision(value: unknown): ItemRevisionStatus | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return {
+    state: enumAt(ITEM_STATES, value, 'state'),
+    distributionChannels: Array.isArray(value.distributionChannels)
+      ? value.distributionChannels.flatMap((channel: unknown) =>
+          isRecord(channel)
+            ? [
+                {
+                  deployPercentage: numberAt(channel, 'deployPercentage'),
+                  crxVersion: stringAt(channel, 'crxVersion'),
+                },
+              ]
+            : [],
+        )
+      : undefined,
+  };
+}
+
+/**
+ * Read an item status response.
+ *
+ * @param body Decoded response body.
+ * @returns The typed status; unknown or malformed fields are undefined.
+ */
+function parseStatus(body: unknown): StatusResponse {
+  const record = isRecord(body) ? body : {};
+  return {
+    lastAsyncUploadState: enumAt(UPLOAD_STATES, record, 'lastAsyncUploadState'),
+    submittedItemRevisionStatus: parseRevision(
+      record.submittedItemRevisionStatus,
+    ),
+    publishedItemRevisionStatus: parseRevision(
+      record.publishedItemRevisionStatus,
+    ),
+    takenDown: booleanAt(record, 'takenDown'),
+    warned: booleanAt(record, 'warned'),
+  };
+}
+
+/**
+ * Read a publish response.
+ *
+ * @param body Decoded response body.
+ * @returns The typed response; unknown or malformed fields are undefined.
+ */
+function parsePublish(body: unknown): PublishResponse {
+  const record = isRecord(body) ? body : {};
+  const info = isRecord(record.warningInfo) ? record.warningInfo : {};
+  return {
+    state: enumAt(ITEM_STATES, record, 'state'),
+    warningInfo: {
+      warnings: (Array.isArray(info.warnings) ? info.warnings : []).flatMap(
+        (warning: unknown) =>
+          isRecord(warning)
+            ? [
+                {
+                  reason: stringAt(warning, 'reason'),
+                  description: stringAt(warning, 'description'),
+                },
+              ]
+            : [],
+      ),
+    },
+  };
+}
+
 export interface ClientOptions {
   readonly publisherId: string;
   readonly extensionId: string;
@@ -405,14 +537,22 @@ export interface ClientOptions {
   readonly log?: (message: string) => void;
 }
 
-const ACCEPTED_STATES: readonly ItemState[] = [
+const ACCEPTED_STATES = [
   'PENDING_REVIEW',
   'STAGED',
   'PUBLISHED',
   'PUBLISHED_TO_TESTERS',
-];
+] as const satisfies readonly ItemState[];
 
-const HINTS: Record<number, [string, string]> = {
+type Action =
+  | 'status check'
+  | 'upload'
+  | 'publish'
+  | 'cancel submission'
+  | 'deploy percentage update'
+  | 'rollback';
+
+const HINTS: Readonly<Record<number, readonly [string, string]>> = {
   400: [
     'EWEBSTOREBADREQUEST',
     'Open the item in the Chrome Web Store Developer Dashboard and fix anything it reports: the Store listing, Privacy and Distribution tabs must be complete, the manifest version must be higher than the published one, and an item with a submission already in review cannot be updated.',
@@ -431,7 +571,7 @@ const HINTS: Record<number, [string, string]> = {
   ],
 };
 
-const ACTION_HINTS: Readonly<Record<string, string>> = {
+const ACTION_HINTS: Readonly<Partial<Record<Action, string>>> = {
   'cancel submission':
     'Only an item with an active submission can be cancelled.',
   'deploy percentage update':
@@ -449,20 +589,20 @@ const ACTION_HINTS: Readonly<Record<string, string>> = {
  * @param result The failed response.
  * @returns An error to throw.
  */
-function failure(action: string, result: HttpResult): Error {
-  const envelope = (isRecord(result.body) ? result.body : {}) as {
-    error?: {
-      message?: string;
-      status?: string;
-      details?: { reason?: string }[];
-    };
-  };
-  const detail = envelope.error;
-  const reasons = (detail?.details ?? [])
-    .map((entry) => entry.reason)
-    .filter((reason): reason is string => typeof reason === 'string');
+function failure(action: Action, result: HttpResult): SemanticReleaseError {
+  const detail: Readonly<Record<string, unknown>> =
+    isRecord(result.body) && isRecord(result.body.error)
+      ? result.body.error
+      : {};
+  const status = stringAt(detail, 'status');
+  const reasons = (Array.isArray(detail.details) ? detail.details : []).flatMap(
+    (entry: unknown) => {
+      const reason = isRecord(entry) ? stringAt(entry, 'reason') : undefined;
+      return reason === undefined ? [] : [reason];
+    },
+  );
   const text =
-    detail?.message ??
+    stringAt(detail, 'message') ??
     (typeof result.body === 'string' ? result.body : 'no error message');
   const [code, hint] = HINTS[result.status] ?? [
     'EWEBSTOREHTTP',
@@ -470,7 +610,7 @@ function failure(action: string, result: HttpResult): Error {
   ];
   return new SemanticReleaseError(
     `Chrome Web Store ${action} failed with HTTP ${result.status}${
-      detail?.status ? ` ${detail.status}` : ''
+      status ? ` ${status}` : ''
     }: ${text}${reasons.length ? ` (${reasons.join(', ')})` : ''}. ${hint}${
       result.status === 400 || result.status === 403
         ? ` ${ACTION_HINTS[action] ?? ''}`.trimEnd()
@@ -496,22 +636,23 @@ export class WebStoreClient {
     return { Authorization: `Bearer ${this.options.accessToken}`, ...extra };
   }
 
-  private async call(
-    action: string,
+  private async call<T>(
+    action: Action,
     url: string,
     init: NonNullable<Parameters<typeof fetch>[1]>,
+    parse: (body: unknown) => T,
     options: { retries?: number; timeoutMs?: number } = {},
-  ): Promise<unknown> {
+  ): Promise<T> {
     const result = await request(url, init, options).catch((error: unknown) => {
       throw new SemanticReleaseError(
-        `Chrome Web Store ${action} failed. ${(error as Error).message}`,
+        `Chrome Web Store ${action} failed. ${messageOf(error)}`,
         'EWEBSTORENETWORK',
       );
     });
     if (!result.ok) {
       throw failure(action, result);
     }
-    return result.body ?? {};
+    return parse(result.body);
   }
 
   /**
@@ -521,12 +662,13 @@ export class WebStoreClient {
    * @returns The decoded status.
    */
   async fetchStatus(): Promise<StatusResponse> {
-    return (await this.call(
+    return this.call(
       'status check',
       `${API}/v2/${this.name}:fetchStatus`,
       { method: 'GET', headers: this.headers() },
+      parseStatus,
       { retries: 3, timeoutMs: 60000 },
-    )) as StatusResponse;
+    );
   }
 
   /**
@@ -539,7 +681,7 @@ export class WebStoreClient {
    * @throws If the upload fails, is not found, or does not finish in time.
    */
   async upload(zip: Buffer): Promise<UploadResponse> {
-    const response = (await this.call(
+    const response = await this.call(
       'upload',
       `${API}/upload/v2/${this.name}:upload`,
       {
@@ -550,8 +692,9 @@ export class WebStoreClient {
         }),
         body: new Uint8Array(zip),
       },
+      parseUpload,
       { timeoutMs: 600000 },
-    )) as UploadResponse;
+    );
     if (response.uploadState === 'SUCCEEDED') {
       return response;
     }
@@ -604,11 +747,16 @@ export class WebStoreClient {
    * @returns The submission state and any warnings.
    */
   async publish(body: PublishRequest): Promise<PublishResponse> {
-    return (await this.call('publish', `${API}/v2/${this.name}:publish`, {
-      method: 'POST',
-      headers: this.headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-    })) as PublishResponse;
+    return this.call(
+      'publish',
+      `${API}/v2/${this.name}:publish`,
+      {
+        method: 'POST',
+        headers: this.headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      },
+      parsePublish,
+    );
   }
 
   /**
@@ -665,7 +813,7 @@ export class WebStoreClient {
         ),
       );
     }
-    if (!result.state || !ACCEPTED_STATES.includes(result.state)) {
+    if (!isOneOf(ACCEPTED_STATES, result.state)) {
       throw new SemanticReleaseError(
         `Chrome Web Store did not accept the submission (state ${result.state ?? 'unknown'}). Open the item in the Developer Dashboard to see why.`,
         'EPUBLISHSTATE',
@@ -675,15 +823,20 @@ export class WebStoreClient {
   }
 
   private async postJson(
-    action: string,
+    action: Action,
     operation: string,
-    body: unknown,
-  ): Promise<unknown> {
-    return this.call(action, `${API}/v2/${this.name}:${operation}`, {
-      method: 'POST',
-      headers: this.headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-    });
+    body: object,
+  ): Promise<void> {
+    await this.call(
+      action,
+      `${API}/v2/${this.name}:${operation}`,
+      {
+        method: 'POST',
+        headers: this.headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      },
+      () => undefined,
+    );
   }
 
   /**

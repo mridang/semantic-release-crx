@@ -2,7 +2,6 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { zipSync } from 'fflate';
-// @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
 import { isRecord } from './utils/object.js';
 import { toPosixPath } from './utils/path.js';

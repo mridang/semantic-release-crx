@@ -1,8 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import template from 'lodash/template.js';
-// @ts-expect-error since this is not typed
 import SemanticReleaseError from '@semantic-release/error';
+import type {
+  AddChannelContext,
+  PrepareContext,
+  PublishContext,
+  VerifyConditionsContext,
+} from 'semantic-release';
 import { Extension } from './extension.js';
 import {
   DEFAULT_DIST_FOLDER,
@@ -15,9 +20,8 @@ import {
   resolvePublisherId,
   validateConfig,
   type CrxPluginConfig,
-  type StepContext,
 } from './plugin-config.js';
-import { warn } from './utils/logger.js';
+import { codeOf, messageOf } from './utils/error.js';
 import { toManifestVersion } from './version.js';
 import {
   getAccessToken,
@@ -30,6 +34,20 @@ export type {
   PrereleaseMode,
   PublishTarget,
 } from './plugin-config.js';
+
+/**
+ * The errors inside whatever was thrown: the members of an aggregate error,
+ * or the error itself.
+ *
+ * @param error A caught value.
+ * @returns One or more errors.
+ */
+function errorsFrom(error: unknown): readonly Error[] {
+  if (error instanceof AggregateError) {
+    return error.errors.filter((member: unknown) => member instanceof Error);
+  }
+  return [error instanceof Error ? error : new Error(messageOf(error))];
+}
 
 /**
  * semantic-release `verifyConditions` step. Checks the configuration, finds
@@ -45,7 +63,7 @@ export type {
  */
 export async function verifyConditions(
   config: CrxPluginConfig,
-  context: StepContext,
+  context: VerifyConditionsContext,
 ): Promise<void> {
   const { logger } = context;
   if (config.target === 'local') {
@@ -54,7 +72,7 @@ export async function verifyConditions(
     );
     return;
   }
-  const onPrereleaseBranch = Boolean(context.branch?.prerelease);
+  const onPrereleaseBranch = Boolean(context.branch.prerelease);
   if (onPrereleaseBranch && config.prerelease === 'skip') {
     logger.log(
       'Pre-releases are skipped (prerelease: "skip"). Skipping verification of Chrome store credentials.',
@@ -64,13 +82,10 @@ export async function verifyConditions(
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
   const found = await resolveCredentials(context.env ?? process.env).then(
-    (credentials) => ({ credentials, errors: [] as readonly Error[] }),
+    (credentials) => ({ credentials, errors: [] }),
     (error: unknown) => ({
       credentials: undefined,
-      errors:
-        error instanceof AggregateError
-          ? (error.errors as readonly Error[])
-          : [error as Error],
+      errors: errorsFrom(error),
     }),
   );
   const { credentials } = found;
@@ -80,20 +95,20 @@ export async function verifyConditions(
     ...(onPrereleaseBranch && config.prerelease === 'reject'
       ? [
           new SemanticReleaseError(
-            `The branch "${context.branch?.name ?? ''}" is a pre-release branch and the prerelease option is "reject". Use "convert" or "skip", or release from a stable branch.`,
+            `The branch "${context.branch.name}" is a pre-release branch and the prerelease option is "reject". Use "convert" or "skip", or release from a stable branch.`,
             'EPRERELEASE',
           ),
         ]
       : []),
     ...found.errors,
   ];
-  if (problems.length > 0 || !credentials) {
+  if (problems.length > 0 || !credentials || !extension.ok || !publisher.ok) {
     throw new AggregateError(problems);
   }
   logger.log('Verifying Chrome Web Store credentials...');
   const client = new WebStoreClient({
-    publisherId: (publisher as { id: string }).id,
-    extensionId: (extension as { id: string }).id,
+    publisherId: publisher.id,
+    extensionId: extension.id,
     accessToken: await getAccessToken(credentials),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     pollTimeoutMs: config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
@@ -102,8 +117,7 @@ export async function verifyConditions(
   const status = await client.fetchStatus();
   logger.log('Chrome Web Store credentials are valid.');
   if (status.takenDown || status.warned) {
-    warn(
-      logger,
+    logger.warn(
       status.takenDown
         ? 'The item has been taken down for a policy violation. Check the Developer Dashboard.'
         : 'The item has a policy warning and will be taken down if not resolved. Check the Developer Dashboard.',
@@ -124,10 +138,11 @@ export async function verifyConditions(
  */
 export async function prepare(
   config: CrxPluginConfig,
-  context: StepContext,
+  context: PrepareContext,
 ): Promise<void> {
+  const { asset } = config;
   const problems = validateConfig(config, true);
-  if (problems.length > 0) {
+  if (problems.length > 0 || !asset) {
     throw new AggregateError(problems);
   }
   const semver = context.nextRelease?.version;
@@ -158,7 +173,7 @@ export async function prepare(
   await extension.setVersion(semver, log);
   const assetName = (() => {
     try {
-      return template(config.asset as string)({
+      return template(asset)({
         branch: context.branch,
         lastRelease: context.lastRelease,
         nextRelease: context.nextRelease,
@@ -166,7 +181,7 @@ export async function prepare(
       });
     } catch (error) {
       throw new SemanticReleaseError(
-        `The asset template "${config.asset}" could not be evaluated: ${(error as Error).message}`,
+        `The asset template "${asset}" could not be evaluated: ${messageOf(error)}`,
         'EINVALIDASSET',
       );
     }
@@ -181,7 +196,7 @@ interface ReleaseLink {
   readonly url: string;
 }
 
-type Logger = StepContext['logger'];
+type Logger = PublishContext['logger'];
 
 /**
  * Look for a submission that is still waiting for review. With
@@ -206,9 +221,8 @@ async function handlePendingSubmission(
       if (config.cancelPendingSubmission) {
         throw error;
       }
-      warn(
-        logger,
-        `Could not check for a pending submission: ${(error as Error).message}`,
+      logger.warn(
+        `Could not check for a pending submission: ${messageOf(error)}`,
       );
       return false;
     });
@@ -216,8 +230,7 @@ async function handlePendingSubmission(
     return false;
   }
   if (!config.cancelPendingSubmission) {
-    warn(
-      logger,
+    logger.warn(
       'A previous submission is still pending review, so the store may refuse this release. Set cancelPendingSubmission to true to cancel it first.',
     );
     return true;
@@ -234,20 +247,20 @@ async function handlePendingSubmission(
  * @param error The error raised by the store call.
  * @param pending Whether a pending submission was found and kept.
  * @param config Plugin configuration.
- * @returns Never; rethrows the error, with a hint appended when relevant.
+ * @returns The error to throw: the original, or a copy whose message carries
+ * the hint.
  */
-function addPendingHint(
+function withPendingHint(
   error: unknown,
   pending: boolean,
   config: CrxPluginConfig,
-): never {
-  if (pending && !config.cancelPendingSubmission && error instanceof Error) {
-    throw new SemanticReleaseError(
-      `${error.message} A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.`,
-      (error as Error & { code?: string }).code ?? 'EWEBSTORE',
-    );
-  }
-  throw error;
+): unknown {
+  return pending && !config.cancelPendingSubmission && error instanceof Error
+    ? new SemanticReleaseError(
+        `${error.message} A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.`,
+        codeOf(error) ?? 'EWEBSTORE',
+      )
+    : error;
 }
 
 /**
@@ -263,7 +276,7 @@ function addPendingHint(
  */
 export async function publish(
   config: CrxPluginConfig,
-  context: StepContext,
+  context: PublishContext,
 ): Promise<ReleaseLink | undefined> {
   const { logger } = context;
   if (config.target === 'local') {
@@ -283,17 +296,18 @@ export async function publish(
   }
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
+  const { asset } = config;
   const problems = [
     ...validateConfig(config, true),
     ...errorsOf(extension, publisher),
   ];
-  if (problems.length > 0) {
+  if (problems.length > 0 || !asset || !extension.ok || !publisher.ok) {
     throw new AggregateError(problems);
   }
-  const extensionId = (extension as { id: string }).id;
+  const extensionId = extension.id;
   const assetName = (() => {
     try {
-      return template(config.asset as string)({
+      return template(asset)({
         branch: context.branch,
         lastRelease: context.lastRelease,
         nextRelease: context.nextRelease,
@@ -301,7 +315,7 @@ export async function publish(
       });
     } catch (error) {
       throw new SemanticReleaseError(
-        `The asset template "${config.asset}" could not be evaluated: ${(error as Error).message}`,
+        `The asset template "${asset}" could not be evaluated: ${messageOf(error)}`,
         'EINVALIDASSET',
       );
     }
@@ -315,7 +329,7 @@ export async function publish(
   });
   const credentials = await resolveCredentials(context.env ?? process.env);
   const client = new WebStoreClient({
-    publisherId: (publisher as { id: string }).id,
+    publisherId: publisher.id,
     extensionId,
     accessToken: await getAccessToken(credentials),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
@@ -324,9 +338,9 @@ export async function publish(
   });
   const pending = await handlePendingSubmission(config, client, logger);
   logger.log('Uploading zip file to the Chrome Web Store...');
-  const uploaded = await client
-    .upload(zip)
-    .catch((error: unknown) => addPendingHint(error, pending, config));
+  const uploaded = await client.upload(zip).catch((error: unknown) => {
+    throw withPendingHint(error, pending, config);
+  });
   logger.log(
     `Successfully uploaded extension to the Chrome Web Store${
       uploaded.crxVersion ? ` (version ${uploaded.crxVersion})` : ''
@@ -341,8 +355,7 @@ export async function publish(
     return link;
   }
   if (config.target === 'trustedTesters') {
-    warn(
-      logger,
+    logger.warn(
       'Target "trustedTesters" is no longer an API option: the audience is set by the item\'s Distribution settings in the Developer Dashboard. Publishing as "default".',
     );
   }
@@ -365,7 +378,9 @@ export async function publish(
         failOnWarnings: Boolean(config.failOnWarnings),
       },
     )
-    .catch((error: unknown) => addPendingHint(error, pending, config));
+    .catch((error: unknown) => {
+      throw withPendingHint(error, pending, config);
+    });
   logger.log(
     `Successfully published extension to the Chrome Web Store (state ${state})`,
   );
@@ -387,8 +402,8 @@ export async function publish(
  */
 export async function addChannel(
   config: CrxPluginConfig,
-  context: StepContext,
-): Promise<{ readonly name: string; readonly url: string } | undefined> {
+  context: AddChannelContext,
+): Promise<ReleaseLink | undefined> {
   const { logger } = context;
   if (
     config.promoteDeployPercentage === undefined ||
@@ -402,13 +417,13 @@ export async function addChannel(
     ...validateConfig(config, false),
     ...errorsOf(extension, publisher),
   ];
-  if (problems.length > 0) {
+  if (problems.length > 0 || !extension.ok || !publisher.ok) {
     throw new AggregateError(problems);
   }
-  const extensionId = (extension as { id: string }).id;
+  const extensionId = extension.id;
   const credentials = await resolveCredentials(context.env ?? process.env);
   const client = new WebStoreClient({
-    publisherId: (publisher as { id: string }).id,
+    publisherId: publisher.id,
     extensionId,
     accessToken: await getAccessToken(credentials),
     pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,

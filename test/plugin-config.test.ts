@@ -48,17 +48,17 @@ describe('settings', () => {
           { extensionId: 'abc' },
           context({ branch: { name: 'x' } }),
         ),
-      ).toEqual({ id: 'abc' });
+      ).toEqual({ ok: true, id: 'abc' });
     });
 
     it('picks the entry for the current branch (issues 24, 111)', () => {
       const config = { extensionId: { main: 'prod', beta: 'staging' } };
       expect(
         resolveExtensionId(config, context({ branch: { name: 'beta' } })),
-      ).toEqual({ id: 'staging' });
+      ).toEqual({ ok: true, id: 'staging' });
       expect(
         resolveExtensionId(config, context({ branch: { name: 'main' } })),
-      ).toEqual({ id: 'prod' });
+      ).toEqual({ ok: true, id: 'prod' });
     });
 
     it('refuses a branch that has no entry rather than guessing', () => {
@@ -95,6 +95,7 @@ describe('settings', () => {
   describe('resolvePublisherId', () => {
     it('uses the option', () => {
       expect(resolvePublisherId({ publisherId: ' p-1 ' }, context())).toEqual({
+        ok: true,
         id: 'p-1',
       });
     });
@@ -105,7 +106,7 @@ describe('settings', () => {
           {},
           context({ env: { CHROME_PUBLISHER_ID: 'p-2' } }),
         ),
-      ).toEqual({ id: 'p-2' });
+      ).toEqual({ ok: true, id: 'p-2' });
     });
 
     it('points at the Developer Dashboard when missing', () => {
@@ -178,7 +179,7 @@ describe('settings', () => {
           { extensionId: { constructor: 'x' } },
           context({ branch: { name: 'constructor' } }),
         ),
-      ).toEqual({ id: 'x' });
+      ).toEqual({ ok: true, id: 'x' });
     });
   });
 });
