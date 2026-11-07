@@ -218,11 +218,12 @@ export function setTopLevelString(
     first && /^[ \t]*$/.test(text.slice(lineStart, first.start))
       ? text.slice(lineStart, first.start)
       : '  ';
-  const member = `\n${indent}${JSON.stringify(key)}: ${literal}`;
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const member = `${eol}${indent}${JSON.stringify(key)}: ${literal}`;
   return (
     text.slice(0, open + 1) +
     member +
-    (first ? ',' : '\n') +
+    (first ? ',' : eol) +
     text.slice(open + 1)
   );
 }

@@ -137,3 +137,19 @@ describe('hasTopLevel', () => {
     );
   });
 });
+
+describe('setTopLevelString line endings', () => {
+  it('inserts a missing member with CRLF when the file uses CRLF', () => {
+    const out = setTopLevelString(
+      '{\r\n  "name": "x"\r\n}\r\n',
+      'version',
+      '1.0.0',
+    );
+    expect(out).toBe('{\r\n  "version": "1.0.0",\r\n  "name": "x"\r\n}\r\n');
+    expect(out.replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
+  it('uses CRLF when adding to an empty object in a CRLF file', () => {
+    expect(setTopLevelString('{\r\n}', 'version', '1')).not.toMatch(/[^\r]\n/);
+  });
+});
