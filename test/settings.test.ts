@@ -126,3 +126,27 @@ describe('validateConfig', () => {
     expect(validateConfig({ deployPercentage: 2.5 }, false)).toHaveLength(1);
   });
 });
+
+describe('resolveExtensionId inherited keys', () => {
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'does not treat the branch "%s" as an entry',
+    (name) => {
+      const result = resolveExtensionId(
+        { extensionId: { main: 'prod' } },
+        context({ branch: { name } }),
+      );
+      expect('error' in result && codeOf(result.error)).toBe(
+        'EEXTENSIONIDBRANCH',
+      );
+    },
+  );
+
+  it('still matches an own entry with such a name', () => {
+    expect(
+      resolveExtensionId(
+        { extensionId: { constructor: 'x' } },
+        context({ branch: { name: 'constructor' } }),
+      ),
+    ).toEqual({ id: 'x' });
+  });
+});

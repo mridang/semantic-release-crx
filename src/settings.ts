@@ -23,7 +23,10 @@ export function resolveExtensionId(
   }
   if (typeof extensionId === 'object' && extensionId !== null) {
     const branch = context.branch?.name;
-    const id = branch === undefined ? undefined : extensionId[branch];
+    const id =
+      branch !== undefined && Object.hasOwn(extensionId, branch)
+        ? extensionId[branch]
+        : undefined;
     return id
       ? { id }
       : {
