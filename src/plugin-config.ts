@@ -21,37 +21,37 @@ export interface CrxPluginConfig {
    * branch name to item ID so that pre-release branches can publish to a
    * separate staging item. A branch missing from the map is an error.
    */
-  extensionId?: string | Record<string, string>;
+  readonly extensionId?: string | Readonly<Record<string, string>>;
 
   /**
    * Publisher ID from the Developer Dashboard (Account → Publisher ID). Can
    * also be supplied through the `CHROME_PUBLISHER_ID` environment variable.
    */
-  publisherId?: string;
+  readonly publisherId?: string;
 
   /**
    * Path of the zip file to create in `prepare` and upload in `publish`.
    * Parsed as a lodash template with `branch`, `lastRelease`, `nextRelease`
    * and `commits` available.
    */
-  asset?: string;
+  readonly asset?: string;
 
   /**
    * Folder that is zipped. Defaults to `dist`.
    */
-  distFolder?: string;
+  readonly distFolder?: string;
 
   /**
    * Manifest that receives the new version. Defaults to
    * `<distFolder>/manifest.json`.
    */
-  manifestPath?: string;
+  readonly manifestPath?: string;
 
   /**
    * Further manifests, for example the source manifest that is committed to
    * git, that receive the same version as `manifestPath`.
    */
-  additionalManifests?: string[];
+  readonly additionalManifests?: readonly string[];
 
   /**
    * `default` publishes after review, `staged` publishes to the staging area
@@ -59,78 +59,78 @@ export interface CrxPluginConfig {
    * contacts nor needs the store. `trustedTesters` is accepted for
    * compatibility and behaves like `default`.
    */
-  target?: PublishTarget;
+  readonly target?: PublishTarget;
 
   /**
    * How pre-release versions are handled. Defaults to `convert`.
    */
-  prerelease?: PrereleaseMode;
+  readonly prerelease?: PrereleaseMode;
 
   /**
    * Initial rollout percentage (0 to 100) for the published revision.
    */
-  deployPercentage?: number;
+  readonly deployPercentage?: number;
 
   /**
    * Cancel a submission that is still waiting for review before uploading, so
    * a new release is not refused because of it. Off by default.
    */
-  cancelPendingSubmission?: boolean;
+  readonly cancelPendingSubmission?: boolean;
 
   /**
    * Rollout percentage (0 to 100) to raise the published revision to when
    * semantic-release promotes a release to another channel (`addChannel`).
    * Nothing happens when unset.
    */
-  promoteDeployPercentage?: number;
+  readonly promoteDeployPercentage?: number;
 
   /**
    * Ask the store to skip review when the item qualifies.
    */
-  skipReview?: boolean;
+  readonly skipReview?: boolean;
 
   /**
    * Fail the release when the store returns a warning that is not in
    * `ignoredWarnings`. Warnings are only logged by default.
    */
-  failOnWarnings?: boolean;
+  readonly failOnWarnings?: boolean;
 
   /**
    * Warning reasons that never fail the release. Defaults to
    * `['PUBLISHED_WITH_FRICTION_WARNING']`.
    */
-  ignoredWarnings?: string[];
+  readonly ignoredWarnings?: readonly string[];
 
   /**
    * Time between upload status checks, in milliseconds. Defaults to 5000.
    */
-  pollIntervalMs?: number;
+  readonly pollIntervalMs?: number;
 
   /**
    * Longest wait for an asynchronous upload, in milliseconds. Defaults to
    * 300000.
    */
-  pollTimeoutMs?: number;
+  readonly pollTimeoutMs?: number;
 }
 
 /**
  * The parts of the semantic-release step context this plugin reads.
  */
 export interface StepContext {
-  cwd?: string;
-  env?: Record<string, string | undefined>;
-  logger: {
-    log: (...args: unknown[]) => void;
-    warn?: (...args: unknown[]) => void;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly logger: {
+    readonly log: (...args: unknown[]) => void;
+    readonly warn?: (...args: unknown[]) => void;
   };
-  branch?: {
-    name?: string;
-    prerelease?: string | boolean;
-    [k: string]: unknown;
+  readonly branch?: {
+    readonly name?: string;
+    readonly prerelease?: string | boolean;
+    readonly [k: string]: unknown;
   };
-  lastRelease?: Record<string, unknown>;
-  nextRelease?: { version?: string; [k: string]: unknown };
-  commits?: unknown[];
+  readonly lastRelease?: Record<string, unknown>;
+  readonly nextRelease?: { version?: string; readonly [k: string]: unknown };
+  readonly commits?: readonly unknown[];
 }
 
 /**

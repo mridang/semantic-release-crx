@@ -11,6 +11,7 @@ import {
 } from './plugin-config.js';
 import {
   resolveExtensionId,
+  errorsOf,
   resolvePublisherId,
   validateConfig,
 } from './settings.js';
@@ -25,8 +26,8 @@ const ACCEPTED_STATES: ItemState[] = [
 ];
 
 interface ReleaseLink {
-  name: string;
-  url: string;
+  readonly name: string;
+  readonly url: string;
 }
 
 type Logger = StepContext['logger'];
@@ -87,8 +88,10 @@ function addPendingHint(
   config: CrxPluginConfig,
 ): never {
   if (pending && !config.cancelPendingSubmission && error instanceof Error) {
-    error.message +=
-      ' A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.';
+    throw crxError(
+      `${error.message} A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.`,
+      (error as Error & { code?: string }).code ?? 'EWEBSTORE',
+    );
   }
   throw error;
 }
@@ -124,15 +127,12 @@ export async function publish(
     );
     return undefined;
   }
-  const problems = validateConfig(config, true);
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
-  if ('error' in extension) {
-    problems.push(extension.error);
-  }
-  if ('error' in publisher) {
-    problems.push(publisher.error);
-  }
+  const problems = [
+    ...validateConfig(config, true),
+    ...errorsOf(extension, publisher),
+  ];
   if (problems.length > 0) {
     throw aggregate(problems);
   }

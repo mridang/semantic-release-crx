@@ -153,3 +153,34 @@ describe('setTopLevelString line endings', () => {
     expect(setTopLevelString('{\r\n}', 'version', '1')).not.toMatch(/[^\r]\n/);
   });
 });
+
+describe('scanTopLevel malformed input and size', () => {
+  it('rejects a leading comma and a key that is not a string', () => {
+    expect(() => scanTopLevel('{,"a": 1}')).toThrow(/expected a property name/);
+    expect(() => scanTopLevel('{1: 2}')).toThrow(/expected a property name/);
+  });
+
+  it('rejects brackets that never close the root', () => {
+    expect(() => scanTopLevel('{"a": 1 ]')).toThrow(/unterminated value/);
+    expect(() => scanTopLevel('{"a": [1]')).toThrow(/unterminated value/);
+  });
+
+  it('rejects a stray slash', () => {
+    expect(() => scanTopLevel('{"a": /x}')).toThrow(/unexpected character/);
+  });
+
+  it('copes with a 1 MB manifest without recursing per element', () => {
+    const big = JSON.stringify({
+      name: 'x',
+      list: Array.from({ length: 150000 }, (_, i) => i),
+      keys: Object.fromEntries(
+        Array.from({ length: 5000 }, (_, i) => [`k${i}`, `v${i}`]),
+      ),
+      version: '1.0.0',
+    });
+    expect(big.length).toBeGreaterThan(900000);
+    const out = setTopLevelString(big, 'version', '2.0.0');
+    expect(JSON.parse(out).version).toBe('2.0.0');
+    expect(parseJsonc(`// c\n${big}`)).toEqual(JSON.parse(big));
+  });
+});

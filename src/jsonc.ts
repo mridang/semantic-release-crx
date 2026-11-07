@@ -1,148 +1,186 @@
 interface Entry {
-  key: string;
-  start: number;
-  valueStart: number;
-  valueEnd: number;
+  readonly key: string;
+  readonly start: number;
+  readonly valueStart: number;
+  readonly valueEnd: number;
 }
 
 interface TopLevel {
-  open: number;
-  entries: Entry[];
+  readonly open: number;
+  readonly entries: readonly Entry[];
+}
+
+interface Token {
+  readonly text: string;
+  readonly start: number;
+}
+
+const TOKEN =
+  /"[^"\\]*(?:\\[\s\S][^"\\]*)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\/|[{}[\],:]|\s+|[^\s{}[\],:"/]+/g;
+
+/**
+ * Count how many values of a sorted list are smaller than a number.
+ *
+ * @param sorted Ascending numbers.
+ * @param value Number to compare with.
+ * @param low First index still in play.
+ * @param high One past the last index still in play.
+ * @returns The number of elements below `value`.
+ */
+function countBelow(
+  sorted: readonly number[],
+  value: number,
+  low = 0,
+  high = sorted.length,
+): number {
+  if (low >= high) {
+    return low;
+  }
+  const middle = (low + high) >> 1;
+  return sorted[middle] < value
+    ? countBelow(sorted, value, middle + 1, high)
+    : countBelow(sorted, value, low, middle);
 }
 
 /**
- * Advance past whitespace and `//` or block comments, which Chrome accepts in
- * `manifest.json` even though they are not JSON.
+ * Split the text into whitespace, comments, strings, punctuation and
+ * literals, checking that nothing was skipped.
  *
- * @param text Source text.
- * @param from Index to start at.
- * @returns Index of the next significant character.
+ * @param text JSON with comments.
+ * @returns Every token in order.
+ * @throws If a string or comment is not terminated or a character is
+ * unexpected.
  */
-function skipTrivia(text: string, from: number): number {
-  let i = from;
-  for (;;) {
-    if (/\s/.test(text[i] ?? 'x')) {
-      i += 1;
-    } else if (text.startsWith('//', i)) {
-      const end = text.indexOf('\n', i);
-      i = end === -1 ? text.length : end + 1;
-    } else if (text.startsWith('/*', i)) {
-      const end = text.indexOf('*/', i + 2);
-      if (end === -1) {
-        throw new Error('unterminated comment');
-      }
-      i = end + 2;
-    } else {
-      return i;
-    }
+function tokenize(text: string): readonly Token[] {
+  const tokens = [...text.matchAll(TOKEN)].map((match) => ({
+    text: match[0],
+    start: match.index,
+  }));
+  const gap = tokens.findIndex(
+    (token, index) =>
+      token.start !==
+      (index === 0
+        ? 0
+        : tokens[index - 1].start + tokens[index - 1].text.length),
+  );
+  const last = tokens.at(-1);
+  const stop =
+    gap !== -1
+      ? tokens[gap - 1].start + tokens[gap - 1].text.length
+      : last && last.start + last.text.length < text.length
+        ? last.start + last.text.length
+        : tokens.length === 0 && text.length > 0
+          ? 0
+          : -1;
+  if (stop === -1) {
+    return tokens;
   }
+  throw new Error(
+    text[stop] === '"'
+      ? 'unterminated string'
+      : text.startsWith('/*', stop)
+        ? 'unterminated comment'
+        : `unexpected character at offset ${stop}`,
+  );
 }
 
 /**
- * Find the index just past the string literal that starts at `from`.
+ * Whether a token is whitespace or a comment.
  *
- * @param text Source text.
- * @param from Index of the opening quote.
- * @returns Index after the closing quote.
+ * @param token Token to test.
+ * @returns True for tokens that carry no meaning.
  */
-function skipString(text: string, from: number): number {
-  let i = from + 1;
-  while (i < text.length) {
-    if (text[i] === '\\') {
-      i += 2;
-    } else if (text[i] === '"') {
-      return i + 1;
-    } else {
-      i += 1;
-    }
-  }
-  throw new Error('unterminated string');
-}
-
-/**
- * Find the index just past the JSON value that starts at `from`.
- *
- * @param text Source text.
- * @param from Index of the first character of the value.
- * @returns Index after the value.
- */
-function skipValue(text: string, from: number): number {
-  const first = text[from];
-  if (first === '"') {
-    return skipString(text, from);
-  }
-  if (first === '{' || first === '[') {
-    let depth = 0;
-    let i = from;
-    while (i < text.length) {
-      const char = text[i];
-      if (char === '"') {
-        i = skipString(text, i);
-      } else if (text.startsWith('//', i) || text.startsWith('/*', i)) {
-        i = skipTrivia(text, i);
-      } else {
-        depth += char === '{' || char === '[' ? 1 : 0;
-        depth -= char === '}' || char === ']' ? 1 : 0;
-        i += 1;
-        if (depth === 0) {
-          return i;
-        }
-      }
-    }
-    throw new Error('unterminated value');
-  }
-  const literal = /^[^\s,}\]/]+/.exec(text.slice(from));
-  if (!literal) {
-    throw new Error(`unexpected character at offset ${from}`);
-  }
-  return from + literal[0].length;
+function isTrivia(token: Token): boolean {
+  return /^(\s|\/\/|\/\*)/.test(token.text);
 }
 
 /**
  * Locate the members of the top level object without rewriting the document,
- * so edits can leave comments and formatting alone.
+ * so edits can leave comments and formatting alone. Nesting is resolved by
+ * counting brackets with binary searches, so the work is linear in the size of
+ * the file apart from a logarithmic factor and never recurses per element.
  *
  * @param text JSON with comments whose root is an object.
  * @returns The offset of the opening brace and every top level member.
  * @throws If the document is not an object or is malformed.
  */
 export function scanTopLevel(text: string): TopLevel {
-  const open = skipTrivia(text, text.startsWith('﻿') ? 1 : 0);
-  if (text[open] !== '{') {
+  const tokens = tokenize(text).filter((token) => !isTrivia(token));
+  if (tokens[0]?.text !== '{') {
     throw new Error('the root must be an object');
   }
-  const entries: Entry[] = [];
-  let pos = open + 1;
-  for (;;) {
-    const at = skipTrivia(text, pos);
-    if (text[at] === '}') {
-      return { open, entries };
-    }
-    if (text[at] !== '"') {
-      throw new Error(`expected a property name at offset ${at}`);
-    }
-    const keyEnd = skipString(text, at);
-    const colon = skipTrivia(text, keyEnd);
-    if (text[colon] !== ':') {
-      throw new Error(`expected ":" at offset ${colon}`);
-    }
-    const valueStart = skipTrivia(text, colon + 1);
-    const valueEnd = skipValue(text, valueStart);
-    entries.push({
-      key: JSON.parse(text.slice(at, keyEnd)) as string,
-      start: at,
-      valueStart,
-      valueEnd,
-    });
-    const after = skipTrivia(text, valueEnd);
-    if (text[after] === ',') {
-      pos = after + 1;
-    } else if (text[after] === '}') {
-      return { open, entries };
-    } else {
-      throw new Error(`expected "," or "}" at offset ${after}`);
-    }
+  const positions = (wanted: readonly string[]): readonly number[] =>
+    tokens.flatMap((token, index) =>
+      wanted.includes(token.text) ? [index] : [],
+    );
+  const opens = positions(['{', '[']);
+  const closes = positions(['}', ']']);
+  if (opens.length > closes.length) {
+    throw new Error('unterminated value');
   }
+  const depthBefore = (index: number): number =>
+    countBelow(opens, index) - countBelow(closes, index);
+  const rootEnd = tokens.findIndex(
+    (token, index) => token.text === '}' && depthBefore(index) === 1,
+  );
+  if (rootEnd === -1) {
+    throw new Error('unterminated value');
+  }
+  const bounds = [
+    0,
+    ...tokens.flatMap((token, index) =>
+      index > 0 &&
+      index < rootEnd &&
+      token.text === ',' &&
+      depthBefore(index) === 1
+        ? [index]
+        : [],
+    ),
+    rootEnd,
+  ];
+  const entries = bounds.slice(0, -1).flatMap((bound, member): Entry[] => {
+    const from = bound + 1;
+    const to = bounds[member + 1];
+    if (from === to) {
+      if (member === bounds.length - 2) {
+        return [];
+      }
+      throw new Error(`expected a property name at offset ${tokens[to].start}`);
+    }
+    if (!tokens[from].text.startsWith('"')) {
+      throw new Error(
+        `expected a property name at offset ${tokens[from].start}`,
+      );
+    }
+    const colon = tokens[from + 1];
+    if (from + 1 >= to || colon.text !== ':') {
+      throw new Error(
+        `expected ":" at offset ${(from + 1 < to ? colon : tokens[from]).start}`,
+      );
+    }
+    if (from + 2 >= to) {
+      throw new Error(`unexpected character at offset ${tokens[to].start}`);
+    }
+    const values = Array.from(
+      { length: to - from - 2 },
+      (_, k) => from + 2 + k,
+    ).filter((index) => depthBefore(index) === 1);
+    if (values.length !== 1) {
+      throw new Error(
+        `expected "," or "}" at offset ${tokens[values[1]].start}`,
+      );
+    }
+    const lastToken = tokens[to - 1];
+    return [
+      {
+        key: JSON.parse(tokens[from].text) as string,
+        start: tokens[from].start,
+        valueStart: tokens[from + 2].start,
+        valueEnd: lastToken.start + lastToken.text.length,
+      },
+    ];
+  });
+  return { open: tokens[0].start, entries };
 }
 
 /**
@@ -153,28 +191,24 @@ export function scanTopLevel(text: string): TopLevel {
  * @returns Plain JSON.
  */
 export function stripJsonc(text: string): string {
-  const out: string[] = [];
-  let i = text.startsWith('﻿') ? 1 : 0;
-  while (i < text.length) {
-    if (text[i] === '"') {
-      const end = skipString(text, i);
-      out.push(text.slice(i, end));
-      i = end;
-    } else if (text.startsWith('//', i) || text.startsWith('/*', i)) {
-      i = skipTrivia(text, i);
-      out.push(' ');
-    } else if (text[i] === ',') {
-      const next = skipTrivia(text, i + 1);
-      if (text[next] !== '}' && text[next] !== ']') {
-        out.push(',');
+  const tokens = tokenize(text);
+  const significant = tokens.flatMap((token, index) =>
+    isTrivia(token) ? [] : [index],
+  );
+  return tokens
+    .map((token, index) => {
+      if (/^(\/\/|\/\*)/.test(token.text)) {
+        return ' ';
       }
-      i += 1;
-    } else {
-      out.push(text[i]);
-      i += 1;
-    }
-  }
-  return out.join('');
+      if (/^\s/.test(token.text)) {
+        return token.text.replace(/[^\t\n\r ]/g, ' ');
+      }
+      const next = tokens[significant[countBelow(significant, index + 1)]];
+      return token.text === ',' && (next?.text === '}' || next?.text === ']')
+        ? ''
+        : token.text;
+    })
+    .join('');
 }
 
 /**

@@ -8,6 +8,7 @@ import {
 } from './plugin-config.js';
 import {
   resolveExtensionId,
+  errorsOf,
   resolvePublisherId,
   validateConfig,
 } from './settings.js';
@@ -29,7 +30,7 @@ import { WebStoreClient } from './webstore-client.js';
 export async function addChannel(
   config: CrxPluginConfig,
   context: StepContext,
-): Promise<{ name: string; url: string } | undefined> {
+): Promise<{ readonly name: string; readonly url: string } | undefined> {
   const { logger } = context;
   if (
     config.promoteDeployPercentage === undefined ||
@@ -37,15 +38,12 @@ export async function addChannel(
   ) {
     return undefined;
   }
-  const problems = validateConfig(config, false);
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
-  if ('error' in extension) {
-    problems.push(extension.error);
-  }
-  if ('error' in publisher) {
-    problems.push(publisher.error);
-  }
+  const problems = [
+    ...validateConfig(config, false),
+    ...errorsOf(extension, publisher),
+  ];
   if (problems.length > 0) {
     throw aggregate(problems);
   }

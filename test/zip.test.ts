@@ -142,3 +142,21 @@ describe('zipFolder broken symlinks', () => {
     });
   });
 });
+
+describe('zipFolder with many files', () => {
+  it('archives more files than are read at once, in sorted order', async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [
+        `dist/f${String(i).padStart(3, '0')}.txt`,
+        `file ${i}`,
+      ]),
+    );
+    await withTmp({ ...files, 'dist/manifest.json': '{}' }, async (dir) => {
+      const out = join(dir, 'a.zip');
+      expect(await zipFolder(join(dir, 'dist'), out)).toBe(101);
+      const entries = unzip(await readFile(out));
+      expect(Object.keys(entries)).toEqual(Object.keys(entries).toSorted());
+      expect(entries['f042.txt'].toString()).toBe('file 42');
+    });
+  });
+});

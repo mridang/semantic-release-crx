@@ -5,15 +5,15 @@ export interface ManifestVersion {
    * Value for the manifest `version` field: one to four dot separated
    * integers, each between 0 and 65535.
    */
-  version: string;
+  readonly version: string;
 
   /**
    * Value for `version_name`, only set for pre-releases so the full semver is
    * still visible to people.
    */
-  versionName?: string;
+  readonly versionName?: string;
 
-  prerelease: boolean;
+  readonly prerelease: boolean;
 }
 
 const SEMVER =

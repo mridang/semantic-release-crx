@@ -48,57 +48,134 @@ async function listFiles(root: string, skip: string): Promise<string[]> {
 }
 
 /**
- * Build one archive member: its local header plus data, and the matching
- * central directory record.
+ * Encode an unsigned 16 bit little endian number.
+ *
+ * @param value Number between 0 and 65535.
+ * @returns Two bytes.
+ */
+const u16 = (value: number): Buffer =>
+  Buffer.from([value & 0xff, (value >>> 8) & 0xff]);
+
+/**
+ * Encode an unsigned 32 bit little endian number.
+ *
+ * @param value Number between 0 and 4294967295.
+ * @returns Four bytes.
+ */
+const u32 = (value: number): Buffer =>
+  Buffer.from([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+
+interface Packed {
+  readonly name: Buffer;
+  readonly body: Buffer;
+  readonly method: number;
+  readonly crc: number;
+  readonly size: number;
+  readonly local: Buffer;
+}
+
+/**
+ * Compress one file and build its local header plus data.
  *
  * @param name Path inside the archive, with forward slashes.
  * @param data File contents.
- * @param offset Position of the local header in the archive.
- * @returns The local part and the central directory part.
+ * @returns The pieces needed for the local and central records.
  */
-function member(
-  name: string,
-  data: Buffer,
-  offset: number,
-): { local: Buffer; central: Buffer } {
+function pack(name: string, data: Buffer): Packed {
   const deflated = deflateRawSync(data, { level: 9 });
   const stored = deflated.length >= data.length;
   const body = stored ? data : deflated;
   const method = stored ? 0 : 8;
   const nameBytes = Buffer.from(name, 'utf8');
   const crc = crc32(data);
+  const local = Buffer.concat([
+    u32(LOCAL_HEADER),
+    u16(20),
+    u16(UTF8_NAME_FLAG),
+    u16(method),
+    u16(0),
+    u16(DOS_DATE_1980_01_01),
+    u32(crc),
+    u32(body.length),
+    u32(data.length),
+    u16(nameBytes.length),
+    u16(0),
+    nameBytes,
+    body,
+  ]);
+  return { name: nameBytes, body, method, crc, size: data.length, local };
+}
 
-  const local = Buffer.alloc(30 + nameBytes.length);
-  local.writeUInt32LE(LOCAL_HEADER, 0);
-  local.writeUInt16LE(20, 4);
-  local.writeUInt16LE(UTF8_NAME_FLAG, 6);
-  local.writeUInt16LE(method, 8);
-  local.writeUInt16LE(0, 10);
-  local.writeUInt16LE(DOS_DATE_1980_01_01, 12);
-  local.writeUInt32LE(crc, 14);
-  local.writeUInt32LE(body.length, 18);
-  local.writeUInt32LE(data.length, 22);
-  local.writeUInt16LE(nameBytes.length, 26);
-  local.writeUInt16LE(0, 28);
-  nameBytes.copy(local, 30);
+/**
+ * Build the central directory record of a packed file.
+ *
+ * @param packed The packed file.
+ * @param offset Position of its local header in the archive.
+ * @returns The central directory record.
+ */
+function central(packed: Packed, offset: number): Buffer {
+  return Buffer.concat([
+    u32(CENTRAL_HEADER),
+    u16((3 << 8) | 20),
+    u16(20),
+    u16(UTF8_NAME_FLAG),
+    u16(packed.method),
+    u16(0),
+    u16(DOS_DATE_1980_01_01),
+    u32(packed.crc),
+    u32(packed.body.length),
+    u32(packed.size),
+    u16(packed.name.length),
+    u16(0),
+    u16(0),
+    u16(0),
+    u16(0),
+    u32(FILE_MODE_0644),
+    u32(offset),
+    packed.name,
+  ]);
+}
 
-  const central = Buffer.alloc(46 + nameBytes.length);
-  central.writeUInt32LE(CENTRAL_HEADER, 0);
-  central.writeUInt16LE((3 << 8) | 20, 4);
-  central.writeUInt16LE(20, 6);
-  central.writeUInt16LE(UTF8_NAME_FLAG, 8);
-  central.writeUInt16LE(method, 10);
-  central.writeUInt16LE(0, 12);
-  central.writeUInt16LE(DOS_DATE_1980_01_01, 14);
-  central.writeUInt32LE(crc, 16);
-  central.writeUInt32LE(body.length, 20);
-  central.writeUInt32LE(data.length, 24);
-  central.writeUInt16LE(nameBytes.length, 28);
-  central.writeUInt32LE(FILE_MODE_0644, 38);
-  central.writeUInt32LE(offset, 42);
-  nameBytes.copy(central, 46);
+/**
+ * Running totals before each element: `[0, a, a + b, ...]`. Built by halving,
+ * so it is linear apart from a logarithmic factor and its recursion depth is
+ * logarithmic.
+ *
+ * @param sizes Sizes to accumulate.
+ * @returns The offset of each element.
+ */
+function offsetsOf(sizes: readonly number[]): readonly number[] {
+  if (sizes.length <= 1) {
+    return sizes.map(() => 0);
+  }
+  const middle = sizes.length >> 1;
+  const left = offsetsOf(sizes.slice(0, middle));
+  const leftTotal = left[middle - 1] + sizes[middle - 1];
+  return [
+    ...left,
+    ...offsetsOf(sizes.slice(middle)).map((offset) => offset + leftTotal),
+  ];
+}
 
-  return { local: Buffer.concat([local, body]), central };
+/**
+ * Read files with a bounded number open at once, keeping their order.
+ *
+ * @param paths Files to read.
+ * @returns Their contents.
+ */
+async function readAll(paths: readonly string[]): Promise<readonly Buffer[]> {
+  if (paths.length <= 32) {
+    return Promise.all(paths.map((path) => readFile(path)));
+  }
+  const middle = paths.length >> 1;
+  const first = await readAll(paths.slice(0, middle));
+  const second = await readAll(paths.slice(middle));
+  return [...first, ...second];
 }
 
 /**
@@ -135,7 +212,7 @@ export async function zipFolder(
       path,
       name: relative(root, path).split(sep).join('/'),
     }))
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   if (files.length === 0) {
     throw crxError(
       `The distFolder "${folder}" contains no files to zip.`,
@@ -148,22 +225,24 @@ export async function zipFolder(
       'EZIPTOOLARGE',
     );
   }
-  const parts: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-  for (const file of files) {
-    const built = member(file.name, await readFile(file.path), offset);
-    parts.push(built.local);
-    centrals.push(built.central);
-    offset += built.local.length;
-  }
-  const directory = Buffer.concat(centrals);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(END_OF_CENTRAL_DIRECTORY, 0);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
+  const packed = (await readAll(files.map((file) => file.path))).map(
+    (data, index) => pack(files[index].name, data),
+  );
+  const offsets = offsetsOf(packed.map((entry) => entry.local.length));
+  const directory = Buffer.concat(
+    packed.map((entry, index) => central(entry, offsets[index])),
+  );
+  const offset = packed.reduce((sum, entry) => sum + entry.local.length, 0);
+  const end = Buffer.concat([
+    u32(END_OF_CENTRAL_DIRECTORY),
+    u16(0),
+    u16(0),
+    u16(files.length),
+    u16(files.length),
+    u32(directory.length),
+    u32(offset),
+    u16(0),
+  ]);
   if (offset + directory.length + end.length > MAX_32) {
     throw crxError(
       `The distFolder "${folder}" is larger than 4 GiB, which a zip file cannot hold here.`,
@@ -171,6 +250,9 @@ export async function zipFolder(
     );
   }
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, Buffer.concat([...parts, directory, end]));
+  await writeFile(
+    target,
+    Buffer.concat([...packed.map((entry) => entry.local), directory, end]),
+  );
   return files.length;
 }

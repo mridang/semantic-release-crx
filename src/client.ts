@@ -10,17 +10,17 @@ export type { RollbackRequest, StatusResponse };
 
 export interface ConnectionOptions {
   /** Publisher ID from the Developer Dashboard. */
-  publisherId: string;
+  readonly publisherId: string;
   /** The 32 letter item ID. */
-  extensionId: string;
+  readonly extensionId: string;
   /**
    * Environment to read credentials from, with the same variables the plugin
    * uses (`CHROME_ACCESS_TOKEN`, the `GOOGLE_*` OAuth triple or a service
    * account key). Defaults to `process.env`.
    */
-  env?: Record<string, string | undefined>;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   /** Receives progress messages. Silent by default. */
-  log?: (message: string) => void;
+  readonly log?: (message: string) => void;
 }
 
 /**

@@ -1,7 +1,7 @@
 export interface HttpResult {
-  status: number;
-  ok: boolean;
-  body: unknown;
+  readonly status: number;
+  readonly ok: boolean;
+  readonly body: unknown;
 }
 
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);

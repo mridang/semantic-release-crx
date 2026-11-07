@@ -20,54 +20,62 @@ export type ItemState =
   | 'CANCELLED';
 
 export interface UploadResponse {
-  uploadState?: UploadState;
-  crxVersion?: string;
-  itemId?: string;
+  readonly uploadState?: UploadState;
+  readonly crxVersion?: string;
+  readonly itemId?: string;
 }
 
 interface ItemRevisionStatus {
-  state?: ItemState;
-  distributionChannels?: { deployPercentage?: number; crxVersion?: string }[];
+  readonly state?: ItemState;
+  readonly distributionChannels?: readonly {
+    readonly deployPercentage?: number;
+    readonly crxVersion?: string;
+  }[];
 }
 
 export interface StatusResponse {
-  lastAsyncUploadState?: UploadState;
-  submittedItemRevisionStatus?: ItemRevisionStatus;
-  publishedItemRevisionStatus?: ItemRevisionStatus;
-  takenDown?: boolean;
-  warned?: boolean;
+  readonly lastAsyncUploadState?: UploadState;
+  readonly submittedItemRevisionStatus?: ItemRevisionStatus;
+  readonly publishedItemRevisionStatus?: ItemRevisionStatus;
+  readonly takenDown?: boolean;
+  readonly warned?: boolean;
 }
 
 export interface PublishRequest {
-  publishType: 'DEFAULT_PUBLISH' | 'STAGED_PUBLISH';
-  deployInfos?: { deployPercentage: number }[];
-  skipReview?: boolean;
-  blockOnWarnings?: boolean;
+  readonly publishType: 'DEFAULT_PUBLISH' | 'STAGED_PUBLISH';
+  readonly deployInfos?: readonly { readonly deployPercentage: number }[];
+  readonly skipReview?: boolean;
+  readonly blockOnWarnings?: boolean;
 }
 
 export interface PublishResponse {
-  state?: ItemState;
-  warningInfo?: { warnings?: { reason?: string; description?: string }[] };
+  readonly state?: ItemState;
+  readonly warningInfo?: {
+    readonly warnings?: readonly {
+      readonly reason?: string;
+      readonly description?: string;
+    }[];
+  };
 }
 
 export interface RollbackRequest {
   /** Why the rollback is made; shown in the Developer Dashboard. */
-  rollbackReason: string;
+  readonly rollbackReason: string;
   /** The version to assign to the package being rolled back to. */
-  newVersion: string;
+  readonly newVersion: string;
   /** The previously published version to roll back to. */
-  targetCrxVersion?: string;
+  readonly targetCrxVersion?: string;
   /** Validate only, without starting the rollback. */
-  validateOnly?: boolean;
+  readonly validateOnly?: boolean;
 }
 
 export interface ClientOptions {
-  publisherId: string;
-  extensionId: string;
-  accessToken: string;
-  pollIntervalMs: number;
-  pollTimeoutMs: number;
-  log?: (message: string) => void;
+  readonly publisherId: string;
+  readonly extensionId: string;
+  readonly accessToken: string;
+  readonly pollIntervalMs: number;
+  readonly pollTimeoutMs: number;
+  readonly log?: (message: string) => void;
 }
 
 const HINTS: Record<number, [string, string]> = {
@@ -89,7 +97,7 @@ const HINTS: Record<number, [string, string]> = {
   ],
 };
 
-const ACTION_HINTS: Record<string, string> = {
+const ACTION_HINTS: Readonly<Record<string, string>> = {
   'cancel submission':
     'Only an item with an active submission can be cancelled.',
   'deploy percentage update':
@@ -150,7 +158,9 @@ export class WebStoreClient {
     this.name = `publishers/${encodeURIComponent(options.publisherId)}/items/${encodeURIComponent(options.extensionId)}`;
   }
 
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
+  private headers(
+    extra: Readonly<Record<string, string>> = {},
+  ): Readonly<Record<string, string>> {
     return { Authorization: `Bearer ${this.options.accessToken}`, ...extra };
   }
 
@@ -232,10 +242,9 @@ export class WebStoreClient {
 
   private async waitForUpload(): Promise<void> {
     const deadline = Date.now() + this.options.pollTimeoutMs;
-    for (;;) {
+    const poll = async (): Promise<void> => {
       await sleep(this.options.pollIntervalMs);
-      const status = await this.fetchStatus();
-      const state = status.lastAsyncUploadState;
+      const state = (await this.fetchStatus()).lastAsyncUploadState;
       if (state === 'SUCCEEDED') {
         return;
       }
@@ -251,7 +260,9 @@ export class WebStoreClient {
           'EUPLOADTIMEOUT',
         );
       }
-    }
+      return poll();
+    };
+    return poll();
   }
 
   /**

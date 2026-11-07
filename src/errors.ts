@@ -22,6 +22,6 @@ export function crxError(message: string, code: string): Error {
  * @param errors Non-empty list of errors to report together.
  * @returns A single `AggregateError` wrapping them.
  */
-export function aggregate(errors: Error[]): AggregateError {
+export function aggregate(errors: readonly Error[]): AggregateError {
   return new AggregateError(errors, errors.map((e) => e.message).join('\n'));
 }

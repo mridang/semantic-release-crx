@@ -3,6 +3,7 @@ import { aggregate, crxError } from './errors.js';
 import type { CrxPluginConfig, StepContext } from './plugin-config.js';
 import {
   resolveExtensionId,
+  errorsOf,
   resolvePublisherId,
   validateConfig,
 } from './settings.js';
@@ -42,34 +43,32 @@ export async function verifyConditions(
     );
     return;
   }
-  const problems = validateConfig(config, false);
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
-  if ('error' in extension) {
-    problems.push(extension.error);
-  }
-  if ('error' in publisher) {
-    problems.push(publisher.error);
-  }
-  if (onPrereleaseBranch && config.prerelease === 'reject') {
-    problems.push(
-      crxError(
-        `The branch "${context.branch?.name ?? ''}" is a pre-release branch and the prerelease option is "reject". Use "convert" or "skip", or release from a stable branch.`,
-        'EPRERELEASE',
-      ),
-    );
-  }
-  const credentials = await resolveCredentials(context.env ?? process.env).then(
-    (found) => found,
-    (error: unknown) => {
-      problems.push(
-        ...(error instanceof AggregateError
-          ? (error.errors as Error[])
-          : [error as Error]),
-      );
-      return undefined;
-    },
+  const found = await resolveCredentials(context.env ?? process.env).then(
+    (credentials) => ({ credentials, errors: [] as readonly Error[] }),
+    (error: unknown) => ({
+      credentials: undefined,
+      errors:
+        error instanceof AggregateError
+          ? (error.errors as readonly Error[])
+          : [error as Error],
+    }),
   );
+  const { credentials } = found;
+  const problems = [
+    ...validateConfig(config, false),
+    ...errorsOf(extension, publisher),
+    ...(onPrereleaseBranch && config.prerelease === 'reject'
+      ? [
+          crxError(
+            `The branch "${context.branch?.name ?? ''}" is a pre-release branch and the prerelease option is "reject". Use "convert" or "skip", or release from a stable branch.`,
+            'EPRERELEASE',
+          ),
+        ]
+      : []),
+    ...found.errors,
+  ];
   if (problems.length > 0 || !credentials) {
     throw aggregate(problems);
   }

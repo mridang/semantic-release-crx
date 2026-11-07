@@ -52,9 +52,10 @@ export async function prepare(
     ...(config.additionalManifests ?? []),
   ];
   const log = (message: string): void => context.logger.log(message);
-  for (const manifest of manifests) {
+  await manifests.reduce(async (previous, manifest) => {
+    await previous;
     await writeManifestVersion(resolve(cwd, manifest), next, semver, log);
-  }
+  }, Promise.resolve());
   const zipPath = resolveAsset(config.asset as string, context);
   const count = await zipFolder(resolve(cwd, distFolder), zipPath);
   log(`Wrote zipped file with ${count} files to ${zipPath}`);

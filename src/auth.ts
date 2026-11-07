@@ -8,27 +8,27 @@ const CHROME_WEBSTORE_SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 export type Credentials =
-  | { kind: 'accessToken'; accessToken: string }
+  | { readonly kind: 'accessToken'; readonly accessToken: string }
   | {
-      kind: 'oauth';
-      clientId: string;
-      clientSecret: string;
-      refreshToken: string;
+      readonly kind: 'oauth';
+      readonly clientId: string;
+      readonly clientSecret: string;
+      readonly refreshToken: string;
     }
   | {
-      kind: 'serviceAccount';
-      clientEmail: string;
-      privateKey: string;
-      tokenUri: string;
+      readonly kind: 'serviceAccount';
+      readonly clientEmail: string;
+      readonly privateKey: string;
+      readonly tokenUri: string;
     };
 
-type Env = Record<string, string | undefined>;
+type Env = Readonly<Record<string, string | undefined>>;
 
 interface ServiceAccountKey {
-  type?: string;
-  client_email?: string;
-  private_key?: string;
-  token_uri?: string;
+  readonly type?: string;
+  readonly client_email?: string;
+  readonly private_key?: string;
+  readonly token_uri?: string;
 }
 
 /**

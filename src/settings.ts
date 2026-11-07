@@ -79,48 +79,62 @@ export function resolvePublisherId(
 export function validateConfig(
   config: CrxPluginConfig,
   requireAsset: boolean,
-): Error[] {
-  const problems: Error[] = [];
-  if (requireAsset && !config.asset) {
-    problems.push(
-      crxError(
-        "Option 'asset' was not included in the config. Check the README.md for config info.",
-        'ENOASSET',
-      ),
-    );
-  }
-  if (config.target !== undefined && !TARGETS.includes(config.target)) {
-    problems.push(
-      crxError(
-        `Option 'target' must be one of ${TARGETS.join(', ')}, not "${String(config.target)}".`,
-        'EINVALIDTARGET',
-      ),
-    );
-  }
-  if (
-    config.prerelease !== undefined &&
+): readonly Error[] {
+  return [
+    ...(requireAsset && !config.asset
+      ? [
+          crxError(
+            "Option 'asset' was not included in the config. Check the README.md for config info.",
+            'ENOASSET',
+          ),
+        ]
+      : []),
+    ...(config.target !== undefined && !TARGETS.includes(config.target)
+      ? [
+          crxError(
+            `Option 'target' must be one of ${TARGETS.join(', ')}, not "${String(config.target)}".`,
+            'EINVALIDTARGET',
+          ),
+        ]
+      : []),
+    ...(config.prerelease !== undefined &&
     !PRERELEASE_MODES.includes(config.prerelease)
-  ) {
-    problems.push(
-      crxError(
-        `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${String(config.prerelease)}".`,
-        'EINVALIDPRERELEASE',
-      ),
-    );
-  }
-  (['deployPercentage', 'promoteDeployPercentage'] as const).forEach((name) => {
-    const percentage = config[name];
-    if (
-      percentage !== undefined &&
-      !(Number.isInteger(percentage) && percentage >= 0 && percentage <= 100)
-    ) {
-      problems.push(
-        crxError(
-          `Option '${name}' must be a whole number between 0 and 100.`,
-          'EINVALIDDEPLOYPERCENTAGE',
-        ),
-      );
-    }
-  });
-  return problems;
+      ? [
+          crxError(
+            `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${String(config.prerelease)}".`,
+            'EINVALIDPRERELEASE',
+          ),
+        ]
+      : []),
+    ...(['deployPercentage', 'promoteDeployPercentage'] as const).flatMap(
+      (name) => {
+        const percentage = config[name];
+        return percentage !== undefined &&
+          !(
+            Number.isInteger(percentage) &&
+            percentage >= 0 &&
+            percentage <= 100
+          )
+          ? [
+              crxError(
+                `Option '${name}' must be a whole number between 0 and 100.`,
+                'EINVALIDDEPLOYPERCENTAGE',
+              ),
+            ]
+          : [];
+      },
+    ),
+  ];
+}
+
+/**
+ * Collect the errors out of several lookup results.
+ *
+ * @param results Results of `resolveExtensionId` or `resolvePublisherId`.
+ * @returns The errors among them, in order.
+ */
+export function errorsOf(
+  ...results: readonly ({ id: string } | { error: Error })[]
+): readonly Error[] {
+  return results.flatMap((result) => ('error' in result ? [result.error] : []));
 }
