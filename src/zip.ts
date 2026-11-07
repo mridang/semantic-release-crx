@@ -1,7 +1,6 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { deflateRawSync } from 'node:zlib';
-import { crc32 } from './crc32.js';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { crxError } from './errors.js';
 
 const LOCAL_HEADER = 0x04034b50;
