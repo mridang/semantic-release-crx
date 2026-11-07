@@ -239,3 +239,52 @@ describe('WebStoreClient.publish', () => {
     });
   });
 });
+
+describe('WebStoreClient polling edge cases', () => {
+  const polling = (status: unknown, extra: Record<string, unknown> = {}) => {
+    const calls = mockFetch({
+      [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
+      [STATUS]: status as never,
+      [PUBLISH]: { json: { state: 'PUBLISHED' } },
+      ...extra,
+    });
+    return calls;
+  };
+  const published = (calls: { url: string }[]) =>
+    calls.some((c) => c.url.endsWith(':publish'));
+
+  it('keeps waiting on NOT_FOUND and ends in EUPLOADTIMEOUT without publishing', async () => {
+    const calls = polling({ json: { lastAsyncUploadState: 'NOT_FOUND' } });
+    await expect(
+      make([], { pollTimeoutMs: 30 }).upload(Buffer.from('z')),
+    ).rejects.toMatchObject({
+      code: 'EUPLOADTIMEOUT',
+    });
+    expect(
+      calls.filter((c) => c.url.includes('fetchStatus')).length,
+    ).toBeGreaterThan(1);
+    expect(published(calls)).toBe(false);
+  });
+
+  it('surfaces a coded error when fetchStatus fails while polling', async () => {
+    const calls = polling({
+      status: 403,
+      json: { error: { message: 'denied' } },
+    });
+    await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
+      code: 'EWEBSTOREPERMISSION',
+    });
+    expect(published(calls)).toBe(false);
+  });
+
+  it('fails with EUPLOADFAILED when polling reports FAILED', async () => {
+    const calls = polling([
+      { json: { lastAsyncUploadState: 'IN_PROGRESS' } },
+      { json: { lastAsyncUploadState: 'FAILED' } },
+    ]);
+    await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
+      code: 'EUPLOADFAILED',
+    });
+    expect(published(calls)).toBe(false);
+  });
+});

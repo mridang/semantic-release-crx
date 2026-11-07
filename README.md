@@ -264,6 +264,22 @@ Use one item per branch, because Chrome compares versions as numbers and
 would be rejected. Use `prerelease: 'skip'` to build the zip for pre-releases
 without contacting the store, or `'reject'` to forbid them.
 
+## Known limitations
+
+- **Warnings and a half finished release.** The store only returns warnings
+  and the final state in the publish response, after the submission exists.
+  With `failOnWarnings: true` and `ignoredWarnings: []` the plugin sends
+  `blockOnWarnings`, so the store refuses to submit and nothing is half done.
+  When some warnings are ignored (including the default whitelist) the
+  warnings are judged after the submission: the step then fails although the
+  item is already in review, and a `REJECTED` or `CANCELLED` state is reported
+  the same way. Check the Developer Dashboard before re-running.
+- **Upload state.** The store documents `lastAsyncUploadState` as the state of
+  the last asynchronous upload in the past 24 hours. The plugin trusts it and
+  publishes only after it reports `SUCCEEDED`, treating `NOT_FOUND` as "keep
+  waiting" until `pollTimeoutMs`. This has not been verified against the live
+  store.
+
 ## Differences from semantic-release-chrome
 
 - **API.** V2 (`chromewebstore.googleapis.com`) instead of V1.1.
