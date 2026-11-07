@@ -20,6 +20,8 @@
     "chrome-extension",
     "chrome-web-store",
     "webextension",
+    "semver",
+    "nodejs",
     "semantic-release"
   ],
   "author": {
