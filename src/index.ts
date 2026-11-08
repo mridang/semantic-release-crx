@@ -21,6 +21,7 @@ import {
 } from './plugin-config.js';
 import { codeOf, messageOf } from './utils/error.js';
 import { toManifestVersion } from './version.js';
+import type { Dispatcher } from 'undici';
 import { resolveCredentials, WebStoreClient } from './webstore.js';
 
 export type {
@@ -53,11 +54,13 @@ function errorsFrom(error: unknown): readonly Error[] {
  *
  * @param config Plugin configuration from the semantic-release config.
  * @param context semantic-release context.
+ * @param agent The connections to use. semantic-release never passes it; tests do.
  * @throws An aggregate error listing every problem that was found.
  */
 export async function verifyConditions(
   config: CrxPluginConfig,
   context: VerifyConditionsContext,
+  agent?: Dispatcher,
 ): Promise<void> {
   const { logger } = context;
   if (config.target === 'local') {
@@ -107,6 +110,7 @@ export async function verifyConditions(
     pollIntervalMs: config.pollIntervalMs,
     pollTimeoutMs: config.pollTimeoutMs,
     log: logger.log.bind(logger),
+    agent,
   });
   const status = await client.fetchStatus();
   logger.log('Chrome Web Store credentials are valid.');
@@ -267,6 +271,7 @@ function withPendingHint(
  *
  * @param config Plugin configuration from the semantic-release config.
  * @param context semantic-release context.
+ * @param agent The connections to use. semantic-release never passes it; tests do.
  * @returns The release link semantic-release shows in its comments, or
  * undefined when nothing was published.
  * @throws If configuration, credentials, the upload or the submission fail.
@@ -274,6 +279,7 @@ function withPendingHint(
 export async function publish(
   config: CrxPluginConfig,
   context: PublishContext,
+  agent?: Dispatcher,
 ): Promise<ReleaseLink | undefined> {
   const { logger } = context;
   if (config.target === 'local') {
@@ -332,6 +338,7 @@ export async function publish(
     pollIntervalMs: config.pollIntervalMs,
     pollTimeoutMs: config.pollTimeoutMs,
     log: logger.log.bind(logger),
+    agent,
   });
   const pending = await handlePendingSubmission(config, client, logger);
   logger.log('Uploading zip file to the Chrome Web Store...');
@@ -394,12 +401,14 @@ export async function publish(
  *
  * @param config Plugin configuration from the semantic-release config.
  * @param context semantic-release context.
+ * @param agent The connections to use. semantic-release never passes it; tests do.
  * @returns The release link, or undefined when nothing was done.
  * @throws If configuration, credentials or the store call fail.
  */
 export async function addChannel(
   config: CrxPluginConfig,
   context: AddChannelContext,
+  agent?: Dispatcher,
 ): Promise<ReleaseLink | undefined> {
   const { logger } = context;
   if (
@@ -426,6 +435,7 @@ export async function addChannel(
     pollIntervalMs: config.pollIntervalMs,
     pollTimeoutMs: config.pollTimeoutMs,
     log: logger.log.bind(logger),
+    agent,
   });
   logger.log(
     `Raising the published rollout to ${config.promoteDeployPercentage}%...`,

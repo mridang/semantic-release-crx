@@ -39,7 +39,7 @@ Node.js 22 or newer is required. The runtime dependencies are
 `@semantic-release/error`, `lodash` (for the `asset` template),
 `jsonc-parser` (to edit `manifest.json` in place) and `fflate` (to write the
 zip). All are pure JavaScript with no dependencies of their own, so there are
-no native binaries. HTTP uses the built in `fetch`.
+no native binaries. HTTP uses [undici](https://undici.nodejs.org), with its `RetryAgent` for retries and the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` variables honoured.
 
 ## Usage
 
@@ -437,7 +437,7 @@ points at the test that fails without the fix.
 | [89](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/89)                                                                                                                                                       | `PKG_INVALID_ZIP`                             | Fixed                                 | The zip is complete before `prepare` returns, never contains itself, and is verified in tests by an independent reader. Test: `extension.test.ts`.        |
 | [90](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/90)                                                                                                                                                       | Skip publish                                  | Ported                                | Duplicate of 60: `draft` and `local`. Test: `index.test.ts`.                                                                                              |
 | [92](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/92)                                                                                                                                                       | Dependency dashboard                          | Not applicable                        | Renovate bookkeeping. Dependabot is configured here.                                                                                                      |
-| [94](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/94)                                                                                                                                                       | Vulnerable `got` dependency                   | Fixed by design                       | No `got`, `chrome-webstore-upload` or `archiver`; the built in `fetch` is used.                                                                           |
+| [94](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/94)                                                                                                                                                       | Vulnerable `got` dependency                   | Fixed by design                       | No `got`, `chrome-webstore-upload` or `archiver`; `undici` is used.                                                                                       |
 | [103](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/103)                                                                                                                                                     | Versioning without publishing                 | Not applicable                        | A semantic-release configuration question; `target: 'local'` versions and zips without contacting the store. Test: `index.test.ts`.                       |
 | [105](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/105)                                                                                                                                                     | Cannot obtain a refresh token                 | Fixed (documented, plus alternatives) | A terminal based exchange replaces the console snippet, and workload identity or a service account avoids refresh tokens. Test: `webstore.test.ts`.       |
 | [111](https://github.com/GabrielDuarteM/semantic-release-chrome/issues/111)                                                                                                                                                     | Publish pre-releases                          | Fixed                                 | `prerelease` modes, four part versions, `version_name`, branch to item map. Test: `version.test.ts`, `extension.test.ts`, `index.test.ts`.                |
@@ -474,7 +474,7 @@ devbox run -- npm run format:check
 devbox run -- npm test
 ```
 
-The tests never use the network: `fetch` is replaced with a recorded router.
+The unit tests never use the network: undici's `MockAgent` serves recorded replies, and the retry, timeout, proxy and cut-connection behaviour is tested against loopback servers.
 
 ## License
 

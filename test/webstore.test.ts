@@ -1,20 +1,13 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   WebStoreClient,
-  createDispatcher,
+  connections,
   getAccessToken,
   request,
   resolveCredentials,
-  setDispatcher,
 } from '../src/webstore.js';
-import { failFetch, mockFetch } from './utils/fetch-mock.js';
+import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
+import { startTunnelProxy } from './utils/proxy.js';
 import {
   createPublicKey,
   createVerify,
@@ -26,9 +19,7 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import { connect } from 'node:net';
 import { join } from 'node:path';
-import type { Duplex } from 'node:stream';
 import { withTmp } from './utils/tmpdir.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
 import * as client from '../src/webstore.js';
@@ -43,12 +34,16 @@ const make = (lines: string[] = [], overrides = {}): WebStoreClient =>
     pollIntervalMs: 1,
     pollTimeoutMs: 200,
     log: (message) => lines.push(message),
+    agent: mockAgent(),
     ...overrides,
   });
 
+const tokenFor = (credentials: Parameters<typeof getAccessToken>[0]) =>
+  getAccessToken(credentials, mockAgent());
+
 describe('WebStoreClient.upload', () => {
   it('posts the raw zip to the V2 upload endpoint with the bearer token', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [UPLOAD]: { json: { uploadState: 'SUCCEEDED', crxVersion: '1.2.3' } },
     });
     const zip = Buffer.from('zip-bytes');
@@ -63,7 +58,7 @@ describe('WebStoreClient.upload', () => {
   });
 
   it('never retries, so an upload cannot run twice', async () => {
-    const calls = mockFetch({ [UPLOAD]: { status: 503 } });
+    const calls = mockHttp({ [UPLOAD]: { status: 503 } });
     await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EWEBSTOREHTTP',
     });
@@ -72,7 +67,7 @@ describe('WebStoreClient.upload', () => {
 
   it('polls fetchStatus while the upload is in progress, then succeeds', async () => {
     const lines: string[] = [];
-    const calls = mockFetch({
+    const calls = mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: [
         { json: { lastAsyncUploadState: 'IN_PROGRESS' } },
@@ -86,7 +81,7 @@ describe('WebStoreClient.upload', () => {
   });
 
   it('fails with EUPLOADFAILED when the async upload fails', async () => {
-    mockFetch({
+    mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
     });
@@ -96,7 +91,7 @@ describe('WebStoreClient.upload', () => {
   });
 
   it('gives up with EUPLOADTIMEOUT after the bounded wait', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: { json: { lastAsyncUploadState: 'IN_PROGRESS' } },
     });
@@ -112,21 +107,21 @@ describe('WebStoreClient.upload', () => {
   });
 
   it('fails when the upload is reported as FAILED', async () => {
-    mockFetch({ [UPLOAD]: { json: { uploadState: 'FAILED' } } });
+    mockHttp({ [UPLOAD]: { json: { uploadState: 'FAILED' } } });
     await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EUPLOADFAILED',
     });
   });
 
   it('fails with ENOTFOUND-style guidance when the item is NOT_FOUND', async () => {
-    mockFetch({ [UPLOAD]: { json: { uploadState: 'NOT_FOUND' } } });
+    mockHttp({ [UPLOAD]: { json: { uploadState: 'NOT_FOUND' } } });
     await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EWEBSTORENOTFOUND',
     });
   });
 
   it('fails on an unspecified or missing state instead of assuming success', async () => {
-    mockFetch({
+    mockHttp({
       [UPLOAD]: [
         { json: { uploadState: 'UPLOAD_STATE_UNSPECIFIED' } },
         { json: {} },
@@ -143,7 +138,7 @@ describe('WebStoreClient.upload', () => {
 
 describe('WebStoreClient errors', () => {
   const failing = async (status: number, json: unknown) => {
-    mockFetch({ [UPLOAD]: { status, json } });
+    mockHttp({ [UPLOAD]: { status, json } });
     return make()
       .upload(Buffer.from('z'))
       .catch((e: unknown) => e as Error & { code: string });
@@ -188,7 +183,7 @@ describe('WebStoreClient errors', () => {
   });
 
   it('handles other statuses and non JSON bodies', async () => {
-    mockFetch({ [UPLOAD]: { status: 500, text: 'Internal oops' } });
+    mockHttp({ [UPLOAD]: { status: 500, text: 'Internal oops' } });
     const error = await make()
       .upload(Buffer.from('z'))
       .catch((e: unknown) => e as Error & { code: string });
@@ -202,7 +197,7 @@ describe('WebStoreClient errors', () => {
   });
 
   it('reports network failures as EWEBSTORENETWORK', async () => {
-    failFetch(BASE, new Error('offline'));
+    failHttp(BASE, new Error('offline'));
     await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EWEBSTORENETWORK',
     });
@@ -216,7 +211,7 @@ describe('WebStoreClient errors', () => {
 
 describe('WebStoreClient.fetchStatus', () => {
   it('returns the decoded status', async () => {
-    mockFetch({
+    mockHttp({
       [STATUS]: {
         json: { publishedItemRevisionStatus: { state: 'PUBLISHED' } },
       },
@@ -227,13 +222,13 @@ describe('WebStoreClient.fetchStatus', () => {
   });
 
   it('retries transient server errors', async () => {
-    const calls = mockFetch({ [STATUS]: [{ status: 503 }, { json: {} }] });
+    const calls = mockHttp({ [STATUS]: [{ status: 503 }, { json: {} }] });
     await make().fetchStatus();
     expect(calls).toHaveLength(2);
   });
 
   it('url encodes the identifiers', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [`GET ${BASE}/v2/publishers/a%2Fb/items/c%20d:fetchStatus`]: { json: {} },
     });
     await make([], { publisherId: 'a/b', extensionId: 'c d' }).fetchStatus();
@@ -243,7 +238,7 @@ describe('WebStoreClient.fetchStatus', () => {
 
 describe('WebStoreClient.publish', () => {
   it('never retries, so a publish cannot run twice', async () => {
-    const calls = mockFetch({ [PUBLISH]: { status: 503 } });
+    const calls = mockHttp({ [PUBLISH]: { status: 503 } });
     await expect(
       make().publish({ publishType: 'DEFAULT_PUBLISH' }),
     ).rejects.toMatchObject({ code: 'EWEBSTOREHTTP' });
@@ -251,7 +246,7 @@ describe('WebStoreClient.publish', () => {
   });
 
   it('posts the publish options as JSON and returns the state', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
     });
     const result = await make().publish({
@@ -266,7 +261,7 @@ describe('WebStoreClient.publish', () => {
   });
 
   it('surfaces an API error', async () => {
-    mockFetch({
+    mockHttp({
       [PUBLISH]: {
         status: 400,
         json: { error: { message: 'pending review' } },
@@ -282,7 +277,7 @@ describe('WebStoreClient.publish', () => {
 
 describe('WebStoreClient polling edge cases', () => {
   const polling = (status: unknown, extra: Record<string, unknown> = {}) => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: status as never,
       [PUBLISH]: { json: { state: 'PUBLISHED' } },
@@ -331,7 +326,7 @@ describe('WebStoreClient polling edge cases', () => {
 
 describe('WebStoreClient promotion, cancel and rollback', () => {
   it('uses the V2 operation URLs and JSON bodies', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [`POST ${BASE}/v2/${ITEM}:cancelSubmission`]: { json: {} },
       [`POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`]: { json: {} },
       [`POST ${BASE}/v2/${ITEM}:rollback`]: { json: {} },
@@ -351,7 +346,7 @@ describe('WebStoreClient promotion, cancel and rollback', () => {
   });
 
   it('adds the precondition hint for a 403 as well', async () => {
-    mockFetch({
+    mockHttp({
       [`POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`]: {
         status: 403,
         json: { error: { message: 'no' } },
@@ -367,7 +362,7 @@ describe('WebStoreClient promotion, cancel and rollback', () => {
 
 describe('WebStoreClient.hasPendingSubmission', () => {
   it('is true only while the submitted revision is pending review', async () => {
-    mockFetch({
+    mockHttp({
       [STATUS]: [
         { json: { submittedItemRevisionStatus: { state: 'PENDING_REVIEW' } } },
         { json: { submittedItemRevisionStatus: { state: 'PUBLISHED' } } },
@@ -382,7 +377,7 @@ describe('WebStoreClient.hasPendingSubmission', () => {
 
 describe('WebStoreClient.submit', () => {
   const policy = { ignoredWarnings: ['IGNORED'], failOnWarnings: true };
-  const reply = (json: unknown) => mockFetch({ [PUBLISH]: { json } });
+  const reply = (json: unknown) => mockHttp({ [PUBLISH]: { json } });
 
   it('returns the state and logs every warning', async () => {
     const lines: string[] = [];
@@ -578,18 +573,18 @@ describe('auth', () => {
 
   describe('getAccessToken', () => {
     it('returns an access token without any network call', async () => {
-      const calls = mockFetch({});
-      expect(
-        await getAccessToken({ kind: 'accessToken', accessToken: 'abc' }),
-      ).toBe('abc');
+      const calls = mockHttp({});
+      expect(await tokenFor({ kind: 'accessToken', accessToken: 'abc' })).toBe(
+        'abc',
+      );
       expect(calls).toHaveLength(0);
     });
 
     it('retries the token exchange on a server error', async () => {
-      const calls = mockFetch({
+      const calls = mockHttp({
         [TOKEN]: [{ status: 503 }, { json: { access_token: 'fresh' } }],
       });
-      const token = await getAccessToken({
+      const token = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'secret',
@@ -601,8 +596,8 @@ describe('auth', () => {
     });
 
     it('exchanges a refresh token', async () => {
-      const calls = mockFetch({ [TOKEN]: { json: { access_token: 'fresh' } } });
-      const token = await getAccessToken({
+      const calls = mockHttp({ [TOKEN]: { json: { access_token: 'fresh' } } });
+      const token = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'secret',
@@ -618,7 +613,7 @@ describe('auth', () => {
     });
 
     it('explains an expired or revoked refresh token (issue 114)', async () => {
-      mockFetch({
+      mockHttp({
         [TOKEN]: {
           status: 400,
           json: {
@@ -627,7 +622,7 @@ describe('auth', () => {
           },
         },
       });
-      const error = await getAccessToken({
+      const error = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'secret',
@@ -640,11 +635,11 @@ describe('auth', () => {
     });
 
     it('reports a rejected OAuth client', async () => {
-      mockFetch({
+      mockHttp({
         [TOKEN]: { status: 401, json: { error: 'invalid_client' } },
       });
       await expect(
-        getAccessToken({
+        tokenFor({
           kind: 'oauth',
           clientId: 'id',
           clientSecret: 's',
@@ -654,7 +649,7 @@ describe('auth', () => {
     });
 
     it('reports any other failure and an empty token response', async () => {
-      mockFetch({
+      mockHttp({
         [TOKEN]: [
           { status: 400, json: { error: 'access_denied' } },
           { json: {} },
@@ -666,17 +661,17 @@ describe('auth', () => {
         clientSecret: 's',
         refreshToken: 'r',
       } as const;
-      await expect(getAccessToken(credentials)).rejects.toMatchObject({
+      await expect(tokenFor(credentials)).rejects.toMatchObject({
         code: 'EAUTH',
       });
-      await expect(getAccessToken(credentials)).rejects.toMatchObject({
+      await expect(tokenFor(credentials)).rejects.toMatchObject({
         code: 'EAUTH',
       });
     });
 
     it('reports a network failure without leaking the request', async () => {
-      failFetch('https://oauth2.googleapis.com', new Error('offline'));
-      const error = await getAccessToken({
+      failHttp('https://oauth2.googleapis.com', new Error('offline'));
+      const error = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'TOPSECRET',
@@ -687,13 +682,13 @@ describe('auth', () => {
     });
 
     it('signs a service account assertion Google can verify', async () => {
-      const calls = mockFetch({
+      const calls = mockHttp({
         [TOKEN]: { json: { access_token: 'sa-token' } },
       });
       const credentials = await resolveCredentials({
         GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountJson,
       });
-      expect(await getAccessToken(credentials)).toBe('sa-token');
+      expect(await tokenFor(credentials)).toBe('sa-token');
       const body = calls[0].body as { grant_type: string; assertion: string };
       expect(body.grant_type).toBe(
         'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -723,140 +718,143 @@ describe('auth', () => {
   });
 });
 
-describe('http', () => {
-  afterEach(() => jest.restoreAllMocks());
+describe('request', () => {
+  const GET = 'GET https://x.test/a';
+  const URL_A = 'https://x.test/a';
 
-  describe('request', () => {
-    it('decodes a JSON body', async () => {
-      mockFetch({ 'GET https://x.test/a': { json: { ok: 1 } } });
-      expect(await request('https://x.test/a', {})).toEqual({
-        status: 200,
-        ok: true,
-        body: { ok: 1 },
-      });
+  it('decodes a JSON body', async () => {
+    mockHttp({ [GET]: { json: { ok: 1 } } });
+    expect(await request(URL_A, {}, mockAgent())).toEqual({
+      status: 200,
+      ok: true,
+      body: { ok: 1 },
     });
+  });
 
-    it('falls back to text for a body that is not JSON', async () => {
-      mockFetch({
-        'GET https://x.test/a': { status: 502, text: '<html>bad</html>' },
-      });
-      expect(await request('https://x.test/a', {})).toMatchObject({
-        status: 502,
-        ok: false,
-        body: '<html>bad</html>',
-      });
+  it('falls back to text for a body that is not JSON', async () => {
+    mockHttp({ [GET]: { status: 502, text: '<html>bad</html>' } });
+    expect(await request(URL_A, {}, mockAgent())).toMatchObject({
+      status: 502,
+      ok: false,
+      body: '<html>bad</html>',
     });
+  });
 
-    it('returns an undefined body for an empty response', async () => {
-      mockFetch({ 'GET https://x.test/a': {} });
-      expect((await request('https://x.test/a', {})).body).toBeUndefined();
+  it('returns an undefined body for an empty response', async () => {
+    mockHttp({ [GET]: {} });
+    expect((await request(URL_A, {}, mockAgent())).body).toBeUndefined();
+  });
+
+  it('sends the Accept and User-Agent headers that fetch used to send', async () => {
+    const calls = mockHttp({ [GET]: {} });
+    await request(URL_A, { headers: { 'X-Extra': '1' } }, mockAgent());
+    expect(calls[0].headers).toMatchObject({
+      accept: 'application/json',
+      'user-agent': 'semantic-release-crx',
+      'X-Extra': '1',
     });
+  });
 
-    it('retries throttling and server errors when asked to', async () => {
-      const calls = mockFetch({
-        'GET https://x.test/a': [
-          { status: 429 },
-          { status: 503 },
-          { json: { ok: 1 } },
-        ],
-      });
-      const result = await request('https://x.test/a', {}, { retries: 2 });
-      expect(result.ok).toBe(true);
-      expect(calls).toHaveLength(3);
+  it('retries throttling and server errors when asked to', async () => {
+    const calls = mockHttp({
+      [GET]: [{ status: 429 }, { status: 503 }, { json: { ok: 1 } }],
     });
+    const result = await request(URL_A, {}, mockAgent(), { retries: 2 });
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(3);
+  });
 
-    it('returns the last response once the retries are used up', async () => {
-      const calls = mockFetch({
-        'GET https://x.test/a': {
-          status: 503,
-          text: 'down',
-        },
-      });
-      const result = await request('https://x.test/a', {}, { retries: 2 });
-      expect(result).toMatchObject({ status: 503, ok: false, body: 'down' });
-      expect(calls).toHaveLength(3);
+  it('returns the last response once the retries are used up', async () => {
+    const calls = mockHttp({ [GET]: { status: 503, text: 'down' } });
+    const result = await request(URL_A, {}, mockAgent(), { retries: 2 });
+    expect(result).toMatchObject({ status: 503, ok: false, body: 'down' });
+    expect(calls).toHaveLength(3);
+  });
+
+  it('retries a POST only when retryPost is set, as the token exchange does', async () => {
+    const calls = mockHttp({
+      'POST https://x.test/a': [{ status: 500 }, { json: { ok: 1 } }],
     });
+    const result = await request(URL_A, { method: 'POST' }, mockAgent(), {
+      retries: 1,
+      retryPost: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
 
-    it('retries a POST when it is given retries, as the token exchange is', async () => {
-      const calls = mockFetch({
-        'POST https://x.test/a': [{ status: 500 }, { json: { ok: 1 } }],
-      });
-      const result = await request(
-        'https://x.test/a',
-        { method: 'POST' },
+  it('never retries a POST without retryPost, whatever retries says', async () => {
+    const calls = mockHttp({ 'POST https://x.test/a': { status: 503 } });
+    const result = await request(URL_A, { method: 'POST' }, mockAgent(), {
+      retries: 3,
+    });
+    expect(result.status).toBe(503);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not retry unless asked to', async () => {
+    const calls = mockHttp({ [GET]: { status: 503 } });
+    const result = await request(URL_A, {}, mockAgent());
+    expect(result.status).toBe(503);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not retry a client error', async () => {
+    const calls = mockHttp({ [GET]: { status: 404 } });
+    await request(URL_A, {}, mockAgent(), { retries: 3 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('retries a dropped connection, then gives up with a message free of secrets', async () => {
+    const attempts = failHttp(
+      'https://x.test',
+      Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    );
+    await expect(
+      request(
+        'https://x.test/a?token=secret',
+        { headers: { Authorization: 'Bearer secret' } },
+        mockAgent(),
         { retries: 1 },
-      );
-      expect(result.ok).toBe(true);
-      expect(calls).toHaveLength(2);
-    });
+      ),
+    ).rejects.toThrow('Network error calling x.test: socket hang up');
+    expect(attempts()).toBe(2);
+  });
 
-    it('does not retry unless asked to', async () => {
-      const calls = mockFetch({ 'POST https://x.test/a': { status: 503 } });
-      const result = await request('https://x.test/a', { method: 'POST' });
-      expect(result.status).toBe(503);
-      expect(calls).toHaveLength(1);
-    });
+  it('does not retry an error code that is not a connection failure', async () => {
+    const attempts = failHttp(
+      'https://x.test',
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    );
+    await expect(
+      request(URL_A, {}, mockAgent(), { retries: 2 }),
+    ).rejects.toThrow('Network error calling x.test: denied');
+    expect(attempts()).toBe(1);
+  });
 
-    it('does not retry a client error', async () => {
-      const calls = mockFetch({ 'GET https://x.test/a': { status: 404 } });
-      await request('https://x.test/a', {}, { retries: 3 });
-      expect(calls).toHaveLength(1);
-    });
-
-    it('retries a dropped connection, then gives up with a message free of secrets', async () => {
-      const attempts = failFetch(
-        'https://x.test',
-        Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
-      );
-      await expect(
-        request(
-          'https://x.test/a?token=secret',
-          { headers: { Authorization: 'Bearer secret' } },
-          { retries: 1 },
-        ),
-      ).rejects.toThrow('Network error calling x.test: socket hang up');
-      expect(attempts()).toBe(2);
-    });
-
-    it('reports the underlying cause of a wrapped failure', async () => {
-      failFetch(
-        'https://x.test',
-        new Error('wrapped', { cause: new Error('the real reason') }),
-      );
-      await expect(request('https://x.test/a', {})).rejects.toThrow(
-        'Network error calling x.test: the real reason',
-      );
-    });
-
-    it('does not retry an error code that is not a connection failure', async () => {
-      const attempts = failFetch(
-        'https://x.test',
-        Object.assign(new Error('denied'), { code: 'EACCES' }),
-      );
-      await expect(
-        request('https://x.test/a', {}, { retries: 2 }),
-      ).rejects.toThrow('Network error calling x.test: denied');
-      expect(attempts()).toBe(1);
-    });
-
-    it('aborts a request that takes longer than the timeout', async () => {
-      mockFetch({ 'GET https://x.test/a': { delayMs: 300 } });
-      await expect(
-        request('https://x.test/a', {}, { timeoutMs: 20 }),
-      ).rejects.toThrow(/aborted/);
-    });
+  it('names the code of a failure with an empty message, such as a dual-stack refusal', async () => {
+    failHttp(
+      'https://x.test',
+      Object.assign(new AggregateError([new Error('v4'), new Error('v6')]), {
+        code: 'ECONNREFUSED',
+      }),
+    );
+    await expect(request(URL_A, {}, mockAgent())).rejects.toThrow(
+      'Network error calling x.test: ECONNREFUSED',
+    );
   });
 });
 
 describe('request over a real socket', () => {
   const servers: Server[] = [];
+  const saved = { ...process.env };
 
   const listen = async (
     handler: (req: IncomingMessage, res: ServerResponse) => void,
-  ): Promise<{ url: string; seen: string[] }> => {
+  ): Promise<{ url: string; port: number; seen: string[] }> => {
     const seen: string[] = [];
     const server = createServer((req, res) => {
-      seen.push(`${req.method} ${req.url}`);
+      seen.push(`${req.method} ${req.url} ${req.headers.range ?? ''}`.trim());
       handler(req, res);
     });
     servers.push(server);
@@ -865,42 +863,19 @@ describe('request over a real socket', () => {
     );
     const address = server.address();
     const port = typeof address === 'object' && address ? address.port : 0;
-    return { url: `http://127.0.0.1:${port}`, seen };
+    return { url: `http://127.0.0.1:${port}`, port, seen };
   };
-
-  const listenProxy = async (): Promise<{ url: string; seen: string[] }> => {
-    const seen: string[] = [];
-    const server = createServer();
-    server.on('connect', (req, client: Duplex, head) => {
-      seen.push(req.url ?? '');
-      const [host, port] = (req.url ?? '').split(':');
-      const upstream = connect(Number(port), host, () => {
-        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        upstream.write(head);
-        upstream.pipe(client);
-        client.pipe(upstream);
-      });
-      upstream.on('error', () => client.destroy());
-      client.on('error', () => upstream.destroy());
-    });
-    servers.push(server);
-    await new Promise<void>((resolve) =>
-      server.listen(0, '127.0.0.1', resolve),
-    );
-    const address = server.address();
-    const port = typeof address === 'object' && address ? address.port : 0;
-    return { url: `http://127.0.0.1:${port}`, seen };
-  };
-
-  beforeEach(() => {
-    setDispatcher(createDispatcher());
-  });
 
   afterEach(async () => {
+    process.env = { ...saved };
     await Promise.all(
-      servers
-        .splice(0)
-        .map((server) => new Promise((resolve) => server.close(resolve))),
+      servers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
     );
   });
 
@@ -911,10 +886,27 @@ describe('request over a real socket', () => {
       res.end(first ? 'busy' : '{"ok":1}');
     });
     const started = Date.now();
-    const result = await request(`${url}/a`, {}, { retries: 1 });
+    const result = await request(`${url}/a`, {}, connections(), {
+      retries: 1,
+    });
     expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
     expect(seen).toHaveLength(2);
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  it('caps a long Retry-After at the call timeout, so the process is not held', async () => {
+    const { url, seen } = await listen((_req, res) => {
+      const first = seen.length === 1;
+      res.writeHead(first ? 429 : 200, first ? { 'Retry-After': '20' } : {});
+      res.end('{}');
+    });
+    const started = Date.now();
+    await request(`${url}/a`, {}, connections(), {
+      retries: 1,
+      timeoutMs: 300,
+    });
+    expect(seen).toHaveLength(2);
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 
   it('sends a retried POST body again, intact', async () => {
@@ -931,7 +923,8 @@ describe('request over a real socket', () => {
     const result = await request(
       `${url}/token`,
       { method: 'POST', body: 'grant_type=x' },
-      { retries: 1 },
+      connections(),
+      { retries: 1, retryPost: true },
     );
     expect(result.ok).toBe(true);
     expect(bodies).toEqual(['grant_type=x', 'grant_type=x']);
@@ -945,46 +938,126 @@ describe('request over a real socket', () => {
       req.on('end', () => res.end('{}'));
     });
     const zip = Buffer.from('zip-bytes');
-    await request(`${url}/up`, {
-      method: 'POST',
-      headers: { 'Content-Length': String(zip.length) },
-      body: zip,
-    });
+    await request(
+      `${url}/up`,
+      {
+        method: 'POST',
+        headers: { 'Content-Length': String(zip.length) },
+        body: zip,
+      },
+      connections(),
+    );
     expect(lengths).toEqual(['9']);
+  });
+
+  it('retries an attempt that stalls, as a dropped connection is', async () => {
+    const { url, seen } = await listen((_req, res) => {
+      if (seen.length === 1) {
+        return;
+      }
+      res.end('{"ok":1}');
+    });
+    const result = await request(`${url}/a`, {}, connections(), {
+      retries: 1,
+      timeoutMs: 1000,
+    });
+    expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('gives up when every attempt stalls', async () => {
+    const { url, seen } = await listen(() => undefined);
+    await expect(
+      request(`${url}/a`, {}, connections(), { retries: 1, timeoutMs: 1000 }),
+    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('sends the whole request again, not a Range resume, when the body is cut short', async () => {
+    const { url, seen } = await listen((_req, res) => {
+      if (seen.length === 1) {
+        res.writeHead(200, { 'Content-Length': '100' });
+        res.write('{"par');
+        setTimeout(() => res.socket?.destroy(), 20);
+        return;
+      }
+      res.end('{"ok":1}');
+    });
+    const result = await request(
+      `${url}/a`,
+      { method: 'POST', body: 'a=1' },
+      connections(),
+      { retries: 2, retryPost: true },
+    );
+    expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
+    expect(seen.at(-1)).not.toMatch(/bytes=/);
+  });
+
+  it('names the code when a closed local port refuses the connection, without leaking the URL', async () => {
+    const { port } = await listen(() => undefined);
+    await Promise.all(
+      servers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
+      ),
+    );
+    const error = await request(
+      `http://localhost:${port}/a?token=SECRET`,
+      { headers: { Authorization: 'Bearer SECRET' } },
+      connections(),
+    ).catch((e: unknown) => e);
+    expect(String(error)).toContain('ECONNREFUSED');
+    expect(String(error)).not.toContain('SECRET');
+  });
+
+  it('reports a body that is cut short when the request may not be retried', async () => {
+    const { url } = await listen((_req, res) => {
+      res.writeHead(200, { 'Content-Length': '100' });
+      res.write('{"par');
+      setTimeout(() => res.socket?.destroy(), 20);
+    });
+    await expect(
+      request(`${url}/a`, { method: 'POST', body: 'a=1' }, connections(), {
+        retries: 3,
+      }),
+    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
   });
 
   it('goes through the proxy named by the environment', async () => {
     const target = await listen((_req, res) => res.end('{"direct":1}'));
-    const proxy = await listenProxy();
-    const saved = { ...process.env };
-    process.env.HTTP_PROXY = proxy.url;
-    delete process.env.NO_PROXY;
-    delete process.env.no_proxy;
-    delete process.env.http_proxy;
+    const proxy = await startTunnelProxy(target.port);
     try {
-      setDispatcher(createDispatcher());
+      process.env.HTTP_PROXY = proxy.url;
+      process.env.NO_PROXY = '';
+      delete process.env.http_proxy;
+      delete process.env.no_proxy;
+      const result = await request(
+        'http://something.invalid/a',
+        {},
+        connections(),
+      );
+      expect(result.body).toEqual({ direct: 1 });
+      expect(proxy.tunnelled).toEqual(['something.invalid:80']);
     } finally {
-      process.env = saved;
+      await proxy.close();
     }
-    const result = await request(`${target.url}/a`, {});
-    expect(result.body).toEqual({ direct: 1 });
-    expect(proxy.seen).toEqual([target.url.replace('http://', '')]);
   });
 
   it('skips the proxy for hosts listed in NO_PROXY', async () => {
     const target = await listen((_req, res) => res.end('{"direct":1}'));
-    const proxy = await listenProxy();
-    const saved = { ...process.env };
-    process.env.HTTP_PROXY = proxy.url;
-    process.env.NO_PROXY = '127.0.0.1';
-    delete process.env.no_proxy;
+    const proxy = await startTunnelProxy(target.port);
     try {
-      setDispatcher(createDispatcher());
-      const result = await request(`${target.url}/a`, {});
+      process.env.HTTP_PROXY = proxy.url;
+      process.env.NO_PROXY = '127.0.0.1';
+      delete process.env.http_proxy;
+      delete process.env.no_proxy;
+      const result = await request(`${target.url}/a`, {}, connections());
       expect(result.body).toEqual({ direct: 1 });
-      expect(proxy.seen).toHaveLength(0);
+      expect(proxy.tunnelled).toHaveLength(0);
     } finally {
-      process.env = saved;
+      await proxy.close();
     }
   });
 });
@@ -996,6 +1069,9 @@ describe('client', () => {
     publisherId: 'pub-1',
     extensionId: 'ext-1',
     env: { CHROME_ACCESS_TOKEN: 'SECRET-TOKEN' },
+    get agent() {
+      return mockAgent();
+    },
   };
   const ROLLBACK = `POST ${BASE}/v2/${ITEM}:rollback`;
   const CANCEL = `POST ${BASE}/v2/${ITEM}:cancelSubmission`;
@@ -1016,7 +1092,7 @@ describe('client', () => {
 
   describe('rollback', () => {
     it('sends the request schema fields with the bearer token', async () => {
-      const calls = mockFetch({ [ROLLBACK]: { json: {} } });
+      const calls = mockHttp({ [ROLLBACK]: { json: {} } });
       await client.rollback({
         ...base,
         rollbackReason: 'crash on start',
@@ -1035,7 +1111,7 @@ describe('client', () => {
     });
 
     it('leaves out the optional fields that were not given', async () => {
-      const calls = mockFetch({ [ROLLBACK]: { json: {} } });
+      const calls = mockHttp({ [ROLLBACK]: { json: {} } });
       await client.rollback({
         ...base,
         rollbackReason: 'bad',
@@ -1048,7 +1124,7 @@ describe('client', () => {
     });
 
     it('requires a reason and a new version before any request', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       await expect(
         client.rollback({ ...base, rollbackReason: ' ', newVersion: '1' }),
       ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
@@ -1059,7 +1135,7 @@ describe('client', () => {
     });
 
     it('maps store errors with a hint about the version', async () => {
-      mockFetch({
+      mockHttp({
         [ROLLBACK]: {
           status: 400,
           json: { error: { message: 'version too low' } },
@@ -1074,7 +1150,7 @@ describe('client', () => {
     });
 
     it('fails with the credentials code when none are available', async () => {
-      mockFetch({});
+      mockHttp({});
       await expect(
         client.rollback({
           ...base,
@@ -1086,7 +1162,7 @@ describe('client', () => {
     });
 
     it('never exposes the token in an error', async () => {
-      mockFetch({
+      mockHttp({
         [ROLLBACK]: { status: 401, json: { error: { message: 'bad' } } },
       });
       const error = (await client
@@ -1098,13 +1174,13 @@ describe('client', () => {
 
   describe('cancelSubmission', () => {
     it('posts an empty body', async () => {
-      const calls = mockFetch({ [CANCEL]: { json: {} } });
+      const calls = mockHttp({ [CANCEL]: { json: {} } });
       await client.cancelSubmission(base);
       expect(calls[0].body).toEqual({});
     });
 
     it('maps a store error', async () => {
-      mockFetch({
+      mockHttp({
         [CANCEL]: { status: 404, json: { error: { message: 'gone' } } },
       });
       await expect(client.cancelSubmission(base)).rejects.toMatchObject({
@@ -1115,7 +1191,7 @@ describe('client', () => {
 
   describe('setPublishedDeployPercentage', () => {
     it('posts the percentage', async () => {
-      const calls = mockFetch({ [PROMOTE]: { json: {} } });
+      const calls = mockHttp({ [PROMOTE]: { json: {} } });
       await client.setPublishedDeployPercentage({
         ...base,
         deployPercentage: 25,
@@ -1124,7 +1200,7 @@ describe('client', () => {
     });
 
     it('rejects an invalid percentage before any request', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       for (const deployPercentage of [-1, 101, 1.5, Number.NaN]) {
         await expect(
           client.setPublishedDeployPercentage({ ...base, deployPercentage }),
@@ -1138,7 +1214,7 @@ describe('client', () => {
 
   describe('fetchStatus', () => {
     it('returns the status', async () => {
-      mockFetch({ [STATUS]: { json: { takenDown: false } } });
+      mockHttp({ [STATUS]: { json: { takenDown: false } } });
       expect(await client.fetchStatus(base)).toEqual({ takenDown: false });
     });
   });
@@ -1148,7 +1224,7 @@ describe('WebStoreClient response parsing', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('keeps well-formed status fields, including distribution channels', async () => {
-    mockFetch({
+    mockHttp({
       [STATUS]: {
         json: {
           lastAsyncUploadState: 'SUCCEEDED',
@@ -1176,7 +1252,7 @@ describe('WebStoreClient response parsing', () => {
   });
 
   it('drops values of the wrong type or outside the enum rather than trusting them', async () => {
-    mockFetch({
+    mockHttp({
       [STATUS]: {
         json: {
           lastAsyncUploadState: 'MAYBE',
@@ -1199,12 +1275,12 @@ describe('WebStoreClient response parsing', () => {
   });
 
   it('treats a non-object body as an empty response', async () => {
-    mockFetch({ [STATUS]: { text: '"just a string"' } });
+    mockHttp({ [STATUS]: { text: '"just a string"' } });
     expect(await make().fetchStatus()).toEqual({});
   });
 
   it('keeps only well-formed publish warnings', async () => {
-    mockFetch({
+    mockHttp({
       [PUBLISH]: {
         json: {
           state: 'PENDING_REVIEW',
@@ -1222,7 +1298,7 @@ describe('WebStoreClient response parsing', () => {
   });
 
   it('reads error details that are not all objects', async () => {
-    mockFetch({
+    mockHttp({
       [UPLOAD]: {
         status: 400,
         json: {
@@ -1244,7 +1320,7 @@ describe('WebStoreClient.connect', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('uses the default polling settings unless overridden', async () => {
-    mockFetch({
+    mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
     });
@@ -1253,6 +1329,7 @@ describe('WebStoreClient.connect', () => {
       extensionId: 'ext-1',
       credentials: { kind: 'accessToken', accessToken: 'SECRET-TOKEN' },
       pollIntervalMs: 1,
+      agent: mockAgent(),
     });
     await expect(client.upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EUPLOADFAILED',
@@ -1260,7 +1337,7 @@ describe('WebStoreClient.connect', () => {
   });
 
   it('exchanges a refresh token for the access token it uses', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       'POST https://oauth2.googleapis.com/token': {
         json: { access_token: 'minted' },
       },
@@ -1275,6 +1352,7 @@ describe('WebStoreClient.connect', () => {
         clientSecret: 's',
         refreshToken: 'r',
       },
+      agent: mockAgent(),
     });
     await client.fetchStatus();
     expect(calls[1].headers.Authorization).toBe('Bearer minted');
@@ -1285,7 +1363,7 @@ describe('WebStoreClient.connect', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('uses the default polling settings unless overridden', async () => {
-    mockFetch({
+    mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
     });
@@ -1294,6 +1372,7 @@ describe('WebStoreClient.connect', () => {
       extensionId: 'ext-1',
       credentials: { kind: 'accessToken', accessToken: 'SECRET-TOKEN' },
       pollIntervalMs: 1,
+      agent: mockAgent(),
     });
     await expect(client.upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EUPLOADFAILED',
@@ -1301,7 +1380,7 @@ describe('WebStoreClient.connect', () => {
   });
 
   it('exchanges a refresh token for the access token it uses', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       'POST https://oauth2.googleapis.com/token': {
         json: { access_token: 'minted' },
       },
@@ -1316,6 +1395,7 @@ describe('WebStoreClient.connect', () => {
         clientSecret: 's',
         refreshToken: 'r',
       },
+      agent: mockAgent(),
     });
     await client.fetchStatus();
     expect(calls[1].headers.Authorization).toBe('Bearer minted');

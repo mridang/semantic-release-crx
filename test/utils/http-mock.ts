@@ -1,11 +1,11 @@
 import { MockAgent } from 'undici';
-import { setDispatcher } from '../../src/webstore.js';
 import { isRecord } from '../../src/utils/object.js';
 
 interface Reply {
   status?: number;
   json?: unknown;
   text?: string;
+  /** Hold the reply back this long; for timeouts and stalled attempts. */
   delayMs?: number;
 }
 
@@ -16,14 +16,17 @@ export interface Call {
   body: unknown;
 }
 
-type Responder = Reply | ((call: Call) => Reply) | Reply[];
+type Responder =
+  | Reply
+  | readonly Reply[]
+  | ((call: Call) => Omit<Reply, 'delayMs'>);
 
 let agent: MockAgent | undefined;
 
 /**
- * Put a fresh `MockAgent` in front of undici, which `fetch` and the
- * `RetryAgent` in `request()` both resolve through, so no test reaches the
- * network. Each call replaces the previous agent. An unmocked request fails with a `MockNotMatchedError`.
+ * Put a fresh `MockAgent` in place, so no test reaches the network. Each call
+ * replaces the previous agent. An unmocked request fails with a
+ * `MockNotMatchedError`.
  *
  * @returns The agent to register interceptors on.
  */
@@ -31,8 +34,17 @@ function install(): MockAgent {
   void agent?.close();
   agent = new MockAgent({ enableCallHistory: true });
   agent.disableNetConnect();
-  setDispatcher(agent);
   return agent;
+}
+
+/**
+ * The agent set up by the last `mockHttp` or `failHttp`, to pass to the code
+ * under test as its connections.
+ *
+ * @returns The current mock agent, or a new one when nothing was mocked.
+ */
+export function mockAgent(): MockAgent {
+  return agent ?? install();
 }
 
 /**
@@ -76,55 +88,54 @@ function decodeBody(body: unknown, headers: Record<string, string>): unknown {
 }
 
 /**
- * Route undici requests to canned replies so tests never touch the network.
- * Routes are keyed `"METHOD url"`, ignoring any query string. A list of
- * replies is served in order and the last one repeats; a request with no
- * route fails the test loudly.
+ * Route undici requests to canned replies. Routes are keyed
+ * `"METHOD url"`, ignoring any query string. A list of replies is served in
+ * order and the last one repeats; a request with no route fails the test
+ * loudly. Pass `mockAgent()` to the code under test.
  *
  * @param routes Responses keyed by method and URL.
  * @returns Every request that was made, in order.
  */
-export function mockFetch(routes: Record<string, Responder>): Call[] {
+export function mockHttp(routes: Record<string, Responder>): Call[] {
   const calls: Call[] = [];
   const mock = install();
   Object.entries(routes).forEach(([key, route]) => {
     const [method, rawUrl] = key.split(' ');
     const url = new URL(rawUrl);
     const path = url.pathname;
-    let served = 0;
-    const scope = mock
-      .get(url.origin)
-      .intercept({
-        method,
-        path: (actual: string) => actual.split('?')[0] === path,
-      })
-      .reply((options) => {
-        const headers = headerRecord(options.headers);
-        const call: Call = {
+    const steps: readonly (Reply | ((call: Call) => Reply))[] =
+      typeof route === 'function' || !Array.isArray(route) ? [route] : route;
+    steps.forEach((step, index) => {
+      const scope = mock
+        .get(url.origin)
+        .intercept({
           method,
-          url: `${url.origin}${options.path}`,
-          headers,
-          body: decodeBody(options.body, headers),
-        };
-        calls.push(call);
-        const index = served++;
-        const reply =
-          typeof route === 'function'
-            ? route(call)
-            : Array.isArray(route)
-              ? route[Math.min(index, route.length - 1)]
-              : route;
-        return {
-          statusCode: reply.status ?? 200,
-          data:
-            reply.text ??
-            (reply.json === undefined ? '' : JSON.stringify(reply.json)),
-        };
-      })
-      .persist();
-    if (!Array.isArray(route) && typeof route !== 'function' && route.delayMs) {
-      scope.delay(route.delayMs);
-    }
+          path: (actual: string) => actual.split('?')[0] === path,
+        })
+        .reply((options) => {
+          const headers = headerRecord(options.headers);
+          const call: Call = {
+            method,
+            url: `${url.origin}${options.path}`,
+            headers,
+            body: decodeBody(options.body, headers),
+          };
+          calls.push(call);
+          const reply = typeof step === 'function' ? step(call) : step;
+          return {
+            statusCode: reply.status ?? 200,
+            data:
+              reply.text ??
+              (reply.json === undefined ? '' : JSON.stringify(reply.json)),
+          };
+        });
+      const last = index === steps.length - 1;
+      const delay = typeof step === 'function' ? 0 : (step.delayMs ?? 0);
+      const timed = last ? scope.persist() : scope.times(1);
+      if (delay > 0) {
+        timed.delay(delay);
+      }
+    });
   });
   return calls;
 }
@@ -136,7 +147,7 @@ export function mockFetch(routes: Record<string, Responder>): Call[] {
  * @param error What the socket reports.
  * @returns A function giving the number of attempts made so far.
  */
-export function failFetch(origin: string, error: Error): () => number {
+export function failHttp(origin: string, error: Error): () => number {
   const mock = install();
   mock
     .get(origin)
