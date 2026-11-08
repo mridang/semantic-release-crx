@@ -1010,3 +1010,85 @@ describe('WebStoreClient response parsing', () => {
     expect((error as Error).message).toContain('(R1)');
   });
 });
+
+describe('WebStoreClient.connect', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('uses the default polling settings unless overridden', async () => {
+    mockFetch({
+      [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
+      [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
+    });
+    const client = await WebStoreClient.connect({
+      publisherId: 'pub-1',
+      extensionId: 'ext-1',
+      credentials: { kind: 'accessToken', accessToken: 'SECRET-TOKEN' },
+      pollIntervalMs: 1,
+    });
+    await expect(client.upload(Buffer.from('z'))).rejects.toMatchObject({
+      code: 'EUPLOADFAILED',
+    });
+  });
+
+  it('exchanges a refresh token for the access token it uses', async () => {
+    const calls = mockFetch({
+      'POST https://oauth2.googleapis.com/token': {
+        json: { access_token: 'minted' },
+      },
+      [STATUS]: { json: {} },
+    });
+    const client = await WebStoreClient.connect({
+      publisherId: 'pub-1',
+      extensionId: 'ext-1',
+      credentials: {
+        kind: 'oauth',
+        clientId: 'i',
+        clientSecret: 's',
+        refreshToken: 'r',
+      },
+    });
+    await client.fetchStatus();
+    expect(calls[1].headers.Authorization).toBe('Bearer minted');
+  });
+});
+
+describe('WebStoreClient.connect', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('uses the default polling settings unless overridden', async () => {
+    mockFetch({
+      [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
+      [STATUS]: { json: { lastAsyncUploadState: 'FAILED' } },
+    });
+    const client = await WebStoreClient.connect({
+      publisherId: 'pub-1',
+      extensionId: 'ext-1',
+      credentials: { kind: 'accessToken', accessToken: 'SECRET-TOKEN' },
+      pollIntervalMs: 1,
+    });
+    await expect(client.upload(Buffer.from('z'))).rejects.toMatchObject({
+      code: 'EUPLOADFAILED',
+    });
+  });
+
+  it('exchanges a refresh token for the access token it uses', async () => {
+    const calls = mockFetch({
+      'POST https://oauth2.googleapis.com/token': {
+        json: { access_token: 'minted' },
+      },
+      [STATUS]: { json: {} },
+    });
+    const client = await WebStoreClient.connect({
+      publisherId: 'pub-1',
+      extensionId: 'ext-1',
+      credentials: {
+        kind: 'oauth',
+        clientId: 'i',
+        clientSecret: 's',
+        refreshToken: 'r',
+      },
+    });
+    await client.fetchStatus();
+    expect(calls[1].headers.Authorization).toBe('Bearer minted');
+  });
+});

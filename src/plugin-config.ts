@@ -135,10 +135,6 @@ export const DEFAULT_IGNORED_WARNINGS: readonly string[] = [
 
 export const DEFAULT_DIST_FOLDER = 'dist';
 
-export const DEFAULT_POLL_INTERVAL_MS = 5000;
-
-export const DEFAULT_POLL_TIMEOUT_MS = 300000;
-
 /**
  * The manifest path to use when none is configured.
  *
@@ -263,6 +259,18 @@ export function validateConfig(
           ),
         ]
       : []),
+    ...(['pollIntervalMs', 'pollTimeoutMs'] as const).flatMap((name) => {
+      const value: unknown = config[name];
+      return value !== undefined &&
+        !(typeof value === 'number' && Number.isFinite(value) && value > 0)
+        ? [
+            new SemanticReleaseError(
+              `Option '${name}' must be a positive number of milliseconds.`,
+              'EINVALIDPOLL',
+            ),
+          ]
+        : [];
+    }),
     ...(['deployPercentage', 'promoteDeployPercentage'] as const).flatMap(
       (name) => {
         const percentage = config[name];

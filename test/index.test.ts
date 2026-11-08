@@ -958,6 +958,30 @@ describe('publish', () => {
       });
     });
 
+    it('keeps the individual warning errors when a pending submission is left in place', async () => {
+      await withAsset(async (dir) => {
+        mockFetch({
+          [STATUS]: PENDING,
+          [UPLOAD]: OK_UPLOAD,
+          [PUBLISH]: {
+            json: {
+              state: 'PENDING_REVIEW',
+              warningInfo: {
+                warnings: [{ reason: 'BROAD_HOSTS', description: 'broad' }],
+              },
+            },
+          },
+        });
+        const error = (await run(dir, { failOnWarnings: true }).result.catch(
+          (e: unknown) => e,
+        )) as AggregateError;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error.errors).toEqual([
+          expect.objectContaining({ code: 'BROAD_HOSTS', message: 'broad' }),
+        ]);
+      });
+    });
+
     it('does not cancel when nothing is pending', async () => {
       await withAsset(async (dir) => {
         const calls = mockFetch({

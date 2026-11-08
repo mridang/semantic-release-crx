@@ -3,11 +3,13 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { zipSync } from 'fflate';
 import SemanticReleaseError from '@semantic-release/error';
+import { messageOf } from './utils/error.js';
 import { isRecord } from './utils/object.js';
 import { toPosixPath } from './utils/path.js';
 import { toManifestVersion } from './version.js';
 
-const DOS_EPOCH_1980 = Date.UTC(1980, 0, 1);
+// Local midnight, because the zip format stores local time: the same bytes come out in every timezone.
+const ZIP_EPOCH = new Date(1980, 0, 1);
 
 /**
  * A built Chrome extension on disk: the folder that is zipped and the
@@ -52,7 +54,7 @@ export class Extension {
       await previous;
       const text = await readFile(path, 'utf8').catch((error: unknown) => {
         throw new SemanticReleaseError(
-          `Could not read the manifest at "${path}": ${(error as Error).message}. Set manifestPath or distFolder so it points at your manifest.json.`,
+          `Could not read the manifest at "${path}": ${messageOf(error)}. Set manifestPath or distFolder so it points at your manifest.json.`,
           'ENOMANIFEST',
         );
       });
@@ -101,7 +103,8 @@ export class Extension {
    *
    * @param output Zip file to write; its folder is created if needed.
    * @returns The number of files archived.
-   * @throws If the folder is missing or empty, or contains a broken symlink.
+   * @throws If the folder is missing or empty, or contains a broken symlink or a
+   * symlink to a folder (symlinks to files are followed).
    */
   async zip(output: string): Promise<number> {
     const root = resolve(this.distFolder);
@@ -123,19 +126,31 @@ export class Extension {
     const found = await Promise.all(
       entries.map(async (entry): Promise<readonly string[]> => {
         const path = join(entry.parentPath, entry.name);
-        const isFile =
-          entry.isFile() ||
-          (entry.isSymbolicLink() &&
-            (await stat(path).then(
-              (info) => info.isFile(),
+        const kind = entry.isSymbolicLink()
+          ? await stat(path).then(
+              (info) =>
+                info.isFile()
+                  ? 'file'
+                  : info.isDirectory()
+                    ? 'directory'
+                    : 'other',
               () => {
                 throw new SemanticReleaseError(
                   `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
                   'EBROKENSYMLINK',
                 );
               },
-            )));
-        return isFile && resolve(path) !== target ? [path] : [];
+            )
+          : entry.isFile()
+            ? 'file'
+            : 'other';
+        if (kind === 'directory') {
+          throw new SemanticReleaseError(
+            `The distFolder contains a symbolic link to a folder: "${path}". Its files would be left out of the zip, so replace the link with a real copy before zipping.`,
+            'ESYMLINKDIR',
+          );
+        }
+        return kind === 'file' && resolve(path) !== target ? [path] : [];
       }),
     );
     const paths = found.flat().toSorted();
@@ -159,7 +174,7 @@ export class Extension {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(
       target,
-      zipSync(files, { level: 9, mtime: DOS_EPOCH_1980 }),
+      zipSync(files, { level: 9, mtime: ZIP_EPOCH.getTime() }),
     );
     return paths.length;
   }

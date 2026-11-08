@@ -258,12 +258,11 @@ describe('Extension.zip', () => {
     });
   });
 
-  it('follows symlinks to files but not to folders', async () => {
+  it('follows symlinks to files', async () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'real.txt': 'linked' },
       async (dir) => {
         await symlink(join(dir, 'real.txt'), join(dir, 'dist', 'link.txt'));
-        await symlink(join(dir, 'dist'), join(dir, 'dist', 'loop'));
         const out = join(dir, 'asset.zip');
         await Extension.at(join(dir, 'dist'), []).zip(out);
         const entries = unzip(await readFile(out));
@@ -274,6 +273,59 @@ describe('Extension.zip', () => {
         expect(entries['link.txt'].toString()).toBe('linked');
       },
     );
+  });
+
+  it('refuses a symlink to a folder rather than leaving its files out', async () => {
+    await withTmp(
+      { 'dist/manifest.json': '{}', 'assets/a.png': 'x' },
+      async (dir) => {
+        await symlink(join(dir, 'assets'), join(dir, 'dist', 'assets'));
+        await expect(
+          Extension.at(join(dir, 'dist'), []).zip(join(dir, 'a.zip')),
+        ).rejects.toMatchObject({
+          code: 'ESYMLINKDIR',
+          message: expect.stringContaining('assets'),
+        });
+      },
+    );
+  });
+
+  it('refuses a symlink loop', async () => {
+    await withTmp({ 'dist/manifest.json': '{}' }, async (dir) => {
+      await symlink(join(dir, 'dist'), join(dir, 'dist', 'loop'));
+      await expect(
+        Extension.at(join(dir, 'dist'), []).zip(join(dir, 'a.zip')),
+      ).rejects.toMatchObject({ code: 'ESYMLINKDIR' });
+    });
+  });
+
+  it('produces the same bytes in every timezone and does not fail west of UTC', async () => {
+    const saved = process.env.TZ;
+    try {
+      await withTmp(
+        { 'dist/manifest.json': '{}', 'dist/a.js': 'abc' },
+        async (dir) => {
+          const zips = await Promise.all(
+            ['UTC', 'Australia/Sydney', 'America/Los_Angeles'].map(
+              async (tz, index) => {
+                process.env.TZ = tz;
+                const out = join(dir, `${index}.zip`);
+                await Extension.at(join(dir, 'dist'), []).zip(out);
+                return readFile(out);
+              },
+            ),
+          );
+          expect(zips[1].equals(zips[0])).toBe(true);
+          expect(zips[2].equals(zips[0])).toBe(true);
+        },
+      );
+    } finally {
+      if (saved === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = saved;
+      }
+    }
   });
 
   it('fails with a coded error naming a broken symlink', async () => {

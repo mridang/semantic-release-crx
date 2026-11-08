@@ -12,8 +12,6 @@ import { Extension } from './extension.js';
 import {
   DEFAULT_DIST_FOLDER,
   DEFAULT_IGNORED_WARNINGS,
-  DEFAULT_POLL_INTERVAL_MS,
-  DEFAULT_POLL_TIMEOUT_MS,
   errorsOf,
   manifestPathOf,
   resolveExtensionId,
@@ -23,11 +21,7 @@ import {
 } from './plugin-config.js';
 import { codeOf, messageOf } from './utils/error.js';
 import { toManifestVersion } from './version.js';
-import {
-  getAccessToken,
-  resolveCredentials,
-  WebStoreClient,
-} from './webstore.js';
+import { resolveCredentials, WebStoreClient } from './webstore.js';
 
 export type {
   CrxPluginConfig,
@@ -106,13 +100,13 @@ export async function verifyConditions(
     throw new AggregateError(problems);
   }
   logger.log('Verifying Chrome Web Store credentials...');
-  const client = new WebStoreClient({
+  const client = await WebStoreClient.connect({
     publisherId: publisher.id,
     extensionId: extension.id,
-    accessToken: await getAccessToken(credentials),
-    pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    pollTimeoutMs: config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
-    log: (message) => logger.log(message),
+    credentials,
+    pollIntervalMs: config.pollIntervalMs,
+    pollTimeoutMs: config.pollTimeoutMs,
+    log: logger.log.bind(logger),
   });
   const status = await client.fetchStatus();
   logger.log('Chrome Web Store credentials are valid.');
@@ -255,7 +249,10 @@ function withPendingHint(
   pending: boolean,
   config: CrxPluginConfig,
 ): unknown {
-  return pending && !config.cancelPendingSubmission && error instanceof Error
+  return pending &&
+    !config.cancelPendingSubmission &&
+    error instanceof Error &&
+    !(error instanceof AggregateError)
     ? new SemanticReleaseError(
         `${error.message} A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.`,
         codeOf(error) ?? 'EWEBSTORE',
@@ -328,13 +325,13 @@ export async function publish(
     );
   });
   const credentials = await resolveCredentials(context.env ?? process.env);
-  const client = new WebStoreClient({
+  const client = await WebStoreClient.connect({
     publisherId: publisher.id,
     extensionId,
-    accessToken: await getAccessToken(credentials),
-    pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    pollTimeoutMs: config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
-    log: (message) => logger.log(message),
+    credentials,
+    pollIntervalMs: config.pollIntervalMs,
+    pollTimeoutMs: config.pollTimeoutMs,
+    log: logger.log.bind(logger),
   });
   const pending = await handlePendingSubmission(config, client, logger);
   logger.log('Uploading zip file to the Chrome Web Store...');
@@ -422,12 +419,12 @@ export async function addChannel(
   }
   const extensionId = extension.id;
   const credentials = await resolveCredentials(context.env ?? process.env);
-  const client = new WebStoreClient({
+  const client = await WebStoreClient.connect({
     publisherId: publisher.id,
     extensionId,
-    accessToken: await getAccessToken(credentials),
-    pollIntervalMs: config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-    pollTimeoutMs: config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+    credentials,
+    pollIntervalMs: config.pollIntervalMs,
+    pollTimeoutMs: config.pollTimeoutMs,
     log: logger.log.bind(logger),
   });
   logger.log(

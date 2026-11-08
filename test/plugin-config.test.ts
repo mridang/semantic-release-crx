@@ -118,6 +118,33 @@ describe('settings', () => {
     });
   });
 
+  describe('validateConfig polling options', () => {
+    it.each([Number.NaN, 0, -5, Infinity, '300000', null])(
+      'rejects pollTimeoutMs %s so the wait stays bounded',
+      (value) => {
+        expect(
+          validateConfig({ pollTimeoutMs: value as never }, false).map(codeOf),
+        ).toEqual(['EINVALIDPOLL']);
+      },
+    );
+
+    it.each([Number.NaN, 0, -1, '5000'])(
+      'rejects pollIntervalMs %s',
+      (value) => {
+        expect(
+          validateConfig({ pollIntervalMs: value as never }, false).map(codeOf),
+        ).toEqual(['EINVALIDPOLL']);
+      },
+    );
+
+    it('accepts positive numbers and leaving them unset', () => {
+      expect(
+        validateConfig({ pollIntervalMs: 1, pollTimeoutMs: 100 }, false),
+      ).toEqual([]);
+      expect(validateConfig({}, false)).toEqual([]);
+    });
+  });
+
   describe('validateConfig', () => {
     it('accepts a valid configuration', () => {
       expect(

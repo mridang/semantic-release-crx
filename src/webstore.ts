@@ -532,6 +532,10 @@ function parsePublish(body: unknown): PublishResponse {
   };
 }
 
+const DEFAULT_POLL_INTERVAL_MS = 5000;
+
+const DEFAULT_POLL_TIMEOUT_MS = 300000;
+
 export interface ClientOptions {
   readonly publisherId: string;
   readonly extensionId: string;
@@ -632,6 +636,31 @@ export class WebStoreClient {
 
   constructor(private readonly options: ClientOptions) {
     this.name = `publishers/${encodeURIComponent(options.publisherId)}/items/${encodeURIComponent(options.extensionId)}`;
+  }
+
+  /**
+   * Exchange credentials for an access token and build a client with the
+   * default polling settings unless overridden.
+   *
+   * @param options Item, credentials and optional polling and logging settings.
+   * @returns A client holding a fresh access token.
+   */
+  static async connect(options: {
+    readonly publisherId: string;
+    readonly extensionId: string;
+    readonly credentials: Credentials;
+    readonly pollIntervalMs?: number;
+    readonly pollTimeoutMs?: number;
+    readonly log?: (message: string) => void;
+  }): Promise<WebStoreClient> {
+    return new WebStoreClient({
+      publisherId: options.publisherId,
+      extensionId: options.extensionId,
+      accessToken: await getAccessToken(options.credentials),
+      pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      pollTimeoutMs: options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
+      log: options.log,
+    });
   }
 
   private headers(
@@ -901,13 +930,10 @@ export interface ConnectionOptions {
  * @returns A client with a fresh access token.
  */
 async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
-  const credentials = await resolveCredentials(options.env ?? process.env);
-  return new WebStoreClient({
+  return WebStoreClient.connect({
     publisherId: options.publisherId,
     extensionId: options.extensionId,
-    accessToken: await getAccessToken(credentials),
-    pollIntervalMs: 5000,
-    pollTimeoutMs: 300000,
+    credentials: await resolveCredentials(options.env ?? process.env),
     log: options.log,
   });
 }

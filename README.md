@@ -115,8 +115,8 @@ The Chrome Web Store API can update an item but cannot create one.
 | `skipReview`              | `false`                               | **New.** Ask the store to skip review when the item qualifies. The API refuses when review is required.                                                                                                                                                                          |
 | `failOnWarnings`          | `false`                               | **New.** Fail the release when the store returns a warning that is not in `ignoredWarnings`. Warnings are always logged.                                                                                                                                                         |
 | `ignoredWarnings`         | `['PUBLISHED_WITH_FRICTION_WARNING']` | **New.** Warning reasons that never fail the release (the original plugin's whitelist).                                                                                                                                                                                          |
-| `pollIntervalMs`          | `5000`                                | **New.** Time between upload status checks.                                                                                                                                                                                                                                      |
-| `pollTimeoutMs`           | `300000`                              | **New.** Longest wait for an asynchronous upload. The release fails, without publishing, when it is exceeded.                                                                                                                                                                    |
+| `pollIntervalMs`          | `5000`                                | **New.** Time between upload status checks. Must be a positive number.                                                                                                                                                                                                           |
+| `pollTimeoutMs`           | `300000`                              | **New.** Longest wait for an asynchronous upload. The release fails, without publishing, when it is exceeded. Must be a positive number.                                                                                                                                         |
 
 The `target` values behave like this:
 
@@ -248,7 +248,7 @@ writes:
 
 The last numeric identifier of the pre-release becomes the fourth version part,
 so successive pre-releases keep increasing, and `version_name` shows the full
-semantic version to people. Each part must be between 0 and 65535. Stable
+semantic version to people. Each part must be between 0 and 65535. Only the number is kept, not the identifier name, so `alpha.3` and then `beta.1` on the same item go from `1.2.0.3` to `1.2.0.1`, which the store rejects as not higher; use one pre-release identifier per item. Stable
 releases write only `version` (and refresh `version_name` if your manifest has
 one).
 
@@ -412,7 +412,7 @@ on:
   line endings are now preserved.
 - **Zip.** Written with `fflate` instead of `archiver`. The file is complete
   on disk when `prepare` finishes, the archive is never added to itself, and
-  the output is deterministic (sorted entries, fixed timestamps).
+  the output is deterministic in every timezone (sorted entries, fixed timestamps). Symlinks to files are followed; a symlink to a folder or a broken symlink fails the build (`ESYMLINKDIR`, `EBROKENSYMLINK`) instead of silently leaving files out.
 - **Release link** is `https://chromewebstore.google.com/detail/<id>`.
 - **Node.js 22 or newer**, and ESM only.
 - **Template engine** is still lodash's `template`, from the maintained
