@@ -37,9 +37,15 @@ npm install --save-dev @mridang/semantic-release-crx
 
 Node.js 22 or newer is required. The runtime dependencies are
 `@semantic-release/error`, `lodash` (for the `asset` template),
-`jsonc-parser` (to edit `manifest.json` in place) and `fflate` (to write the
-zip). All are pure JavaScript with no dependencies of their own, so there are
-no native binaries. HTTP uses [undici](https://undici.nodejs.org), with its `RetryAgent` for retries and the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` variables honoured.
+`jsonc-parser` (to edit `manifest.json` in place), `fflate` (to write the
+zip) and `undici` (HTTP). All are pure JavaScript with no dependencies of their own, so there are
+no native binaries. HTTP uses [undici](https://undici.nodejs.org) with its `RetryAgent`:
+reads are retried on throttling, server errors and dropped connections,
+honouring `Retry-After`, and an upload or publish is never repeated. The
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` variables are honoured when a call
+starts; a malformed value fails with `EPROXY` and is never printed. Redirects
+are never followed and compressed responses are not decoded, because the
+endpoints used do neither.
 
 ## Usage
 
