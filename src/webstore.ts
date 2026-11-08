@@ -19,6 +19,10 @@ export interface HttpResult {
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 
 /**
+ * TODO: replace the hand-written retry below with undici's `RetryAgent`
+ * (see the TypeScript article, "HTTP retries use undici"); it also honours
+ * `Retry-After`, which this loop does not.
+ *
  * Perform a request and decode a JSON (or fall back to text) response. The
  * request is aborted after `timeoutMs`. Read requests are retried a few times
  * on throttling, server errors and network failures; requests that change
