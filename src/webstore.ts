@@ -18,8 +18,9 @@ export interface HttpResult {
 }
 
 /**
- * Failures worth another attempt: the connection errors undici retries by
- * default, plus DNS hiccups and the timeouts of the underlying socket.
+ * Failures worth another attempt. Setting `errorCodes` replaces undici's
+ * defaults, so this lists them all (the connection errors from `ECONNRESET`
+ * to `UND_ERR_SOCKET`) and adds DNS hiccups and the socket timeouts.
  */
 const RETRYABLE_ERROR_CODES = [
   'ECONNRESET',
@@ -34,6 +35,8 @@ const RETRYABLE_ERROR_CODES = [
   'ETIMEDOUT',
   'UND_ERR_SOCKET',
   'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
 ];
 
 export interface HttpRequest {
@@ -47,8 +50,8 @@ export interface HttpRequest {
  * whole call, retries included, is aborted after `timeoutMs`. When `retries`
  * is above zero the call goes through undici's `RetryAgent`, which retries
  * throttling (429), server errors and connection failures with exponential
- * backoff and honours `Retry-After`, then hands back the last response if the
- * attempts run out. Requests that change state are never given retries, so an
+ * backoff and honours `Retry-After` (capped by undici at 30 seconds), then
+ * hands back the last response if the attempts run out. Requests that change state are never given retries, so an
  * upload or a publish cannot run twice.
  *
  * The dispatcher's `request` is used rather than `fetch` because `fetch`
@@ -104,9 +107,10 @@ export async function request(
       body,
     };
   } catch (error) {
-    throw new Error(
-      `Network error calling ${target.host}: ${messageOf(error)}`,
+    const reason = messageOf(
+      error instanceof Error && error.cause !== undefined ? error.cause : error,
     );
+    throw new Error(`Network error calling ${target.host}: ${reason}`);
   }
 }
 

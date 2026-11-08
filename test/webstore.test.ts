@@ -801,6 +801,16 @@ describe('http', () => {
       expect(attempts()).toBe(2);
     });
 
+    it('reports the underlying cause of a wrapped failure', async () => {
+      failFetch(
+        'https://x.test',
+        new Error('wrapped', { cause: new Error('the real reason') }),
+      );
+      await expect(request('https://x.test/a', {})).rejects.toThrow(
+        'Network error calling x.test: the real reason',
+      );
+    });
+
     it('does not retry an error code that is not a connection failure', async () => {
       const attempts = failFetch(
         'https://x.test',
