@@ -8,7 +8,7 @@ import {
   type Dispatcher,
 } from 'undici';
 import { fromBase64 } from './utils/base64.js';
-import { messageOf } from './utils/error.js';
+import { codeOf, messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
 import { signJwt } from './utils/jwt.js';
 import { isPercentage } from './utils/math.js';
@@ -16,16 +16,70 @@ import { booleanAt, isRecord, numberAt, stringAt } from './utils/object.js';
 import { isOneOf } from './utils/union.js';
 import { nowSeconds } from './utils/time.js';
 
+/**
+ * What a call to the store came back with, with the body already read.
+ */
 export interface HttpResult {
+  /** The HTTP status. */
   readonly status: number;
+  /** Whether the status is in the 2xx range. */
   readonly ok: boolean;
+  /** The body: parsed JSON, else the first 500 characters of the text. */
   readonly body: unknown;
+  /**
+   * Where a redirect points, without its query string, which can hold a
+   * secret. A redirect is never followed.
+   */
+  readonly location?: string;
 }
 
+// transport: shared word for word across the plugins
+
 /**
- * Failures worth another attempt. Setting `errorCodes` replaces undici's
- * defaults, so this lists them all (the connection errors from `ECONNRESET`
- * to `UND_ERR_SOCKET`) and adds DNS hiccups and the socket timeouts.
+ * Sent with every request so that the service can tell who is calling.
+ */
+const USER_AGENT = 'semantic-release-crx';
+
+/**
+ * The longest a whole call may take, retries and back-off included, unless
+ * the call says otherwise.
+ */
+const DEADLINE_MS = 120000;
+
+/**
+ * The longest a single attempt may wait for the response headers or the body,
+ * unless the call says otherwise. An attempt that stalls is abandoned and
+ * retried.
+ */
+const ATTEMPT_TIMEOUT_MS = 30000;
+
+/**
+ * The longest wait between two attempts, which also caps a `Retry-After`
+ * header. It is never more than a quarter of the deadline. A wait in progress
+ * when the deadline passes is cancelled.
+ */
+const MAX_BACKOFF_MS = 15000;
+
+/**
+ * Methods that are safe to repeat. A POST is only retried when the call says
+ * `retryPost`, because only the caller knows that repeating it is harmless.
+ */
+const IDEMPOTENT_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'];
+
+/**
+ * The statuses that are worth another attempt: throttling and server errors.
+ */
+const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
+
+/**
+ * The most of a response body that is read. undici stops a larger body, which
+ * is then reported as a failure and not repeated.
+ */
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Failures worth another attempt. Naming them replaces undici's own list, so
+ * it is repeated here with the resolver and timeout codes added.
  */
 const RETRYABLE_ERROR_CODES = [
   'ECONNRESET',
@@ -45,45 +99,242 @@ const RETRYABLE_ERROR_CODES = [
 ];
 
 /**
- * Create the connections requests are sent through: undici's
- * `EnvHttpProxyAgent`, which honours `HTTP_PROXY`, `HTTPS_PROXY` and
- * `NO_PROXY` the way Node's built-in fetch does under `NODE_USE_ENV_PROXY`.
- * The variables are read when this is called, so a client reads them when it
- * is built. It is undici's own agent rather than `getGlobalDispatcher()`: that
- * slot is shared with the runtime's bundled undici, which may be a different
- * version whose dispatcher a `RetryAgent` cannot wrap ("invalid onError
- * method"). The response timeouts are undici's own five minutes, since the
- * store answers an upload only once it has processed it.
- *
- * @returns A new proxy-aware dispatcher.
+ * The code of the error that stands for a connection lost after the response
+ * headers arrived.
  */
-export function connections(): Dispatcher {
-  return new EnvHttpProxyAgent({
-    connect: { timeout: 10000 },
-    headersTimeout: 300000,
-    bodyTimeout: 300000,
-    // A release makes a handful of calls: do not keep the socket (and so the
-    // process) alive afterwards.
-    keepAliveTimeout: 1,
-    keepAliveMaxTimeout: 1,
-  });
+const BODY_PHASE_CODE = 'UND_ERR_BODY_PHASE';
+
+/**
+ * A connection that failed while the response body was being read. undici
+ * would resume such a response with a `Range` request, which these APIs
+ * ignore; this error is not retried by the retrying agent, so that the whole
+ * request is sent again instead.
+ */
+class BodyPhaseError extends Error {
+  readonly code = BODY_PHASE_CODE;
+
+  /**
+   * @param cause The error that undici reported.
+   */
+  constructor(cause: unknown) {
+    super('the connection was lost while reading the response', { cause });
+  }
 }
 
+/**
+ * The connections to the service, from the installed `undici` (the runtime's
+ * bundled undici cannot be wrapped by `RetryAgent`). They honour the
+ * `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` environment variables, which are
+ * read when this is called.
+ *
+ * @param attemptTimeoutMs How long one attempt may wait for the response.
+ * @returns A dispatcher with connection and response timeouts and a cap on
+ * the size of a response.
+ * @throws {SemanticReleaseError} If a proxy variable is not a valid proxy.
+ * The message names the variables and never their value, which can hold a
+ * password.
+ */
+function connections(attemptTimeoutMs: number): Dispatcher {
+  try {
+    return new EnvHttpProxyAgent({
+      connect: { timeout: 10000 },
+      headersTimeout: attemptTimeoutMs,
+      bodyTimeout: attemptTimeoutMs,
+      maxResponseSize: MAX_BODY_BYTES,
+      // Measured against a server that advertises a long keep-alive: without
+      // this a script that has made one call stays alive for as long as the
+      // server's keep-alive (about 3 seconds against Node's own server). A
+      // one-shot client has no use for an idle connection.
+      keepAliveTimeout: 1,
+      keepAliveMaxTimeout: 1,
+    });
+  } catch {
+    throw new SemanticReleaseError(
+      'HTTP_PROXY, HTTPS_PROXY or NO_PROXY is not a valid proxy setting.',
+      'EPROXY',
+    );
+  }
+}
+
+/**
+ * Describe a failed request that got no response. The message names the host
+ * and the reason, and never the URL, which can hold a secret.
+ *
+ * @param error A caught value.
+ * @param host The host that was called.
+ * @returns An error with the reason in its message.
+ */
+function networkErrorFor(error: unknown, host: string): Error {
+  const reason =
+    isRecord(error) && error.cause !== undefined
+      ? `${messageOf(error)}: ${messageOf(error.cause)}`
+      : messageOf(error);
+  return new Error(`Network error calling ${host}: ${reason}`);
+}
+
+/**
+ * Mark a connection that fails after the response headers arrived, so that
+ * the retrying agent leaves it alone (see {@link BodyPhaseError}).
+ *
+ * @param dispatch The dispatch function to wrap.
+ * @returns A dispatch function that wraps the handler.
+ */
+function markBodyFailures(
+  dispatch: Dispatcher['dispatch'],
+): Dispatcher['dispatch'] {
+  return (options, handler) => {
+    const started = new AbortController();
+    return dispatch(options, {
+      onRequestStart: (controller, context) =>
+        handler.onRequestStart?.(controller, context),
+      onRequestUpgrade: (controller, status, headers, socket) =>
+        handler.onRequestUpgrade?.(controller, status, headers, socket),
+      onResponseStart: (controller, status, headers, message) => {
+        started.abort();
+        handler.onResponseStart?.(controller, status, headers, message);
+      },
+      onResponseData: (controller, chunk) =>
+        handler.onResponseData?.(controller, chunk),
+      onResponseEnd: (controller, trailers) =>
+        handler.onResponseEnd?.(controller, trailers),
+      onResponseError: (controller, error) =>
+        handler.onResponseError?.(
+          controller,
+          started.signal.aborted &&
+            RETRYABLE_ERROR_CODES.includes(codeOf(error) ?? '')
+            ? new BodyPhaseError(error)
+            : error,
+        ),
+    });
+  };
+}
+
+/**
+ * Decode a response body.
+ *
+ * @param text The body as text.
+ * @returns The parsed JSON, undefined for an empty body, else the first 500
+ * characters of the text.
+ */
+function decodeBody(text: string): unknown {
+  if (text === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text.slice(0, 500);
+  }
+}
+
+/**
+ * Where a redirect points, without the query (which can hold a secret), the
+ * fragment or any user info.
+ *
+ * @param location The `Location` header.
+ * @param base The URL that was called, for a relative `Location`.
+ * @returns A URL that is safe to show, or undefined without a usable header.
+ */
+function placeOf(location: unknown, base: URL): string | undefined {
+  if (typeof location !== 'string' || !URL.canParse(location, base.href)) {
+    return undefined;
+  }
+  const target = new URL(location, base.href);
+  return `${target.origin}${target.pathname}`;
+}
+
+/**
+ * Whether a failed attempt is worth another one.
+ *
+ * @param error The error undici reports for the failed attempt.
+ * @param method The method of the request.
+ * @param methods The methods that may be repeated.
+ * @param attempt Which retry this would be, starting at 1.
+ * @param retries How many retries are allowed.
+ * @returns True to try again.
+ */
+function isRetryable(
+  error: unknown,
+  method: string,
+  methods: readonly string[],
+  attempt: number,
+  retries: number,
+): boolean {
+  if (attempt > retries || !methods.includes(method)) {
+    return false;
+  }
+  const code = codeOf(error);
+  if (
+    code !== undefined &&
+    code !== 'UND_ERR_REQ_RETRY' &&
+    !RETRYABLE_ERROR_CODES.includes(code)
+  ) {
+    return false;
+  }
+  const status = isRecord(error) ? numberAt(error, 'statusCode') : undefined;
+  return status === undefined || RETRYABLE_STATUSES.includes(status);
+}
+
+/**
+ * How long to wait before the next attempt: what `Retry-After` asks for, else
+ * exponential back-off, never more than `capMs`.
+ *
+ * @param error The error undici reports for the failed attempt.
+ * @param attempt Which retry this is, starting at 1.
+ * @param minTimeoutMs The first back-off.
+ * @param capMs The longest wait.
+ * @returns The wait in milliseconds.
+ */
+function waitBeforeRetry(
+  error: unknown,
+  attempt: number,
+  minTimeoutMs: number,
+  capMs: number,
+): number {
+  const backoffMs = minTimeoutMs * 2 ** (attempt - 1);
+  const header =
+    isRecord(error) && isRecord(error.headers)
+      ? stringAt(error.headers, 'retry-after')
+      : undefined;
+  if (header === undefined) {
+    return Math.min(backoffMs, capMs);
+  }
+  const seconds = Number(header);
+  const advisedMs = Number.isFinite(seconds)
+    ? seconds * 1000
+    : Date.parse(header) - Date.now();
+  if (advisedMs > 0) {
+    return Math.min(advisedMs, capMs);
+  }
+  return Math.min(backoffMs, capMs);
+}
+
+/**
+ * What the caller of {@link request} can ask for.
+ */
 export interface HttpRequest {
-  readonly method?: 'GET' | 'POST';
+  /** The HTTP method. Defaults to `GET`. */
+  readonly method?: 'GET' | 'HEAD' | 'OPTIONS' | 'PUT' | 'DELETE' | 'POST';
+  /** Extra headers, which replace the defaults of the same name in any case. */
   readonly headers?: Readonly<Record<string, string>>;
+  /** A text or binary body, which can be sent again if the call is retried. */
   readonly body?: string | Uint8Array;
 }
 
+/**
+ * How {@link request} treats time and failure.
+ */
 export interface RequestOptions {
-  /**
-   * How long one attempt may wait for the response headers, and then for the
-   * body, in milliseconds. An attempt that stalls is retried like a dropped
-   * connection.
-   */
-  readonly timeoutMs?: number;
+  /** The connections to use; tests pass undici's `MockAgent`. */
+  readonly agent?: Dispatcher;
+  /** How long one attempt may wait for the headers, then the body. */
+  readonly attemptTimeoutMs?: number;
+  /** How long the whole call may take, retries and back-off included. */
+  readonly deadlineMs?: number;
   /** How many more attempts a retryable request gets. Zero by default. */
   readonly retries?: number;
+  /** The first back-off in milliseconds, doubled for each retry. */
+  readonly minTimeout?: number;
   /**
    * Allow a POST to be retried. Only for a POST that is safe to repeat, such
    * as the token exchange; an upload or a publish never sets it, and without
@@ -93,118 +344,134 @@ export interface RequestOptions {
 }
 
 /**
- * The methods that are retried by default, since repeating them has the same
- * effect as sending them once. POST is deliberately absent.
- */
-const IDEMPOTENT_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'];
-
-/**
- * The longest wait between two attempts. It also caps a `Retry-After` header,
- * and is the longest the process can be held after a call has given up.
- */
-const MAX_BACKOFF_MS = 30000;
-
-/**
- * What `fetch` sent for free. `undici.request` sends neither, so they are
- * added. It also follows no redirects and decodes no `Content-Encoding`; the
- * Google endpoints used here do neither, and since no `Accept-Encoding` is
- * sent the responses come back as plain JSON.
- */
-const DEFAULT_HEADERS = {
-  accept: 'application/json',
-  'user-agent': 'semantic-release-crx',
-} as const;
-
-/**
- * Perform a request and decode a JSON (or fall back to text) response. When
- * the request may be retried (`retries` above zero, and for a POST only with
- * `retryPost`) it goes through undici's `RetryAgent`, which retries throttling
- * (429), server errors and connection failures with exponential backoff and
- * honours `Retry-After`, up to {@link MAX_BACKOFF_MS}; once the attempts run
- * out the last response is returned. A request that changes state is not
- * retried, so an upload or a publish cannot run twice: POST is not in the
- * retried methods unless `retryPost` is set.
+ * Perform a request and decode a JSON (or fall back to text) response.
  *
- * `timeoutMs` applies to each attempt, as headers and body timeouts, and the
- * whole call is also bounded by a deadline of every attempt plus every
- * backoff. If the connection drops while the body is being read, undici would
- * resume with a `Range` request, which these APIs ignore; the whole request is
- * sent again instead, up to `retries` times.
+ * When the request may be retried (`retries` above zero, and for a POST only
+ * with `retryPost`) it goes through undici's `RetryAgent`, which retries
+ * throttling (429), server errors and connection failures with exponential
+ * back-off, honouring `Retry-After`; once the attempts run out the last
+ * response is returned. If the connection drops while the body is being read,
+ * the whole request is sent again, and each such replay gets the retries that
+ * are left. Redirects are never followed and `Content-Encoding` is not
+ * decoded: the endpoints used here do neither.
  *
- * undici's `request` is used rather than `fetch` because `fetch`
- * turns a body into a one-shot stream, which undici cannot send a second time
- * (the retry fails with a content-length mismatch); a string or byte body
- * can be replayed, which the token exchange needs.
+ * The call is bounded by `deadlineMs`. When it passes, a wait for the next
+ * attempt is cancelled and the connections this call created are destroyed,
+ * which also stops a proxy tunnel that is still being set up.
+ *
+ * undici's `request` is used rather than `fetch` because `fetch` turns a body
+ * into a one-shot stream, which undici cannot send a second time.
  *
  * @param url Absolute URL to call.
  * @param init Method, headers and body.
- * @param agent The connections to send the request through.
- * @param options Timeout and retries.
+ * @param options Timeouts, retries and, for tests, the connections.
  * @returns The status and decoded body.
  * @throws If the network call fails after the allowed attempts. The message
- * never contains request headers or bodies.
+ * names the host and never contains the URL, headers or body.
  */
 export async function request(
   url: string,
   init: HttpRequest,
-  agent: Dispatcher,
   options: RequestOptions = {},
 ): Promise<HttpResult> {
-  const { timeoutMs = 60000, retryPost = false } = options;
+  const {
+    attemptTimeoutMs = ATTEMPT_TIMEOUT_MS,
+    deadlineMs = DEADLINE_MS,
+    minTimeout = 500,
+    retryPost = false,
+  } = options;
   const target = new URL(url);
   const method = init.method ?? 'GET';
   const retries =
     method === 'POST' && !retryPost ? 0 : Math.max(0, options.retries ?? 0);
-  const backoffMs = Math.min(MAX_BACKOFF_MS, timeoutMs);
-  const dispatcher =
-    retries > 0
-      ? new RetryAgent(agent, {
-          maxRetries: retries,
-          maxTimeout: backoffMs,
-          throwOnError: false,
-          methods: retryPost
-            ? [...IDEMPOTENT_METHODS, 'POST']
-            : IDEMPOTENT_METHODS,
-          errorCodes: RETRYABLE_ERROR_CODES,
-        })
-      : agent;
-  const deadline = AbortSignal.timeout((retries + 1) * (timeoutMs + backoffMs));
-  const exchange = async (
-    left: number,
-  ): Promise<{ readonly status: number; readonly text: string }> => {
+  const methods = retryPost
+    ? [...IDEMPOTENT_METHODS, 'POST']
+    : IDEMPOTENT_METHODS;
+  const capMs = Math.min(MAX_BACKOFF_MS, Math.floor(deadlineMs / 4));
+  const own =
+    options.agent === undefined ? connections(attemptTimeoutMs) : undefined;
+  const base = options.agent ?? own;
+  const deadline = AbortSignal.timeout(deadlineMs);
+  const finished = new AbortController();
+  const headers = Object.fromEntries(
+    [
+      ['accept', 'application/json'],
+      ['user-agent', USER_AGENT],
+      ...Object.entries(init.headers ?? {}),
+    ].map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  const exchange = async (left: number): Promise<HttpResult> => {
+    const dispatcher =
+      left > 0 && base !== undefined
+        ? new RetryAgent(base.compose(markBodyFailures), {
+            maxRetries: left,
+            throwOnError: false,
+            // Cancel the wait when the deadline passes, so that it cannot
+            // hold the process after the call has given up.
+            retry: (error, { state, opts }, callback) => {
+              if (
+                !isRetryable(error, opts.method, methods, state.counter, left)
+              ) {
+                callback(error);
+                return;
+              }
+              const timer = setTimeout(
+                callback,
+                waitBeforeRetry(error, state.counter, minTimeout, capMs),
+                null,
+              );
+              deadline.addEventListener('abort', () => clearTimeout(timer), {
+                once: true,
+                signal: finished.signal,
+              });
+            },
+          })
+        : base;
     const response = await send(target, {
       dispatcher,
       method,
-      headers: { ...DEFAULT_HEADERS, ...init.headers },
+      headers,
       body: init.body,
       signal: deadline,
-      headersTimeout: timeoutMs,
-      bodyTimeout: timeoutMs,
     });
     const text = await response.body.text().catch((error: unknown) => {
-      if (left > 0) {
+      if (codeOf(error) === BODY_PHASE_CODE && left > 0) {
         return undefined;
       }
       throw error;
     });
-    return text === undefined
-      ? exchange(left - 1)
-      : { status: response.statusCode, text };
+    if (text === undefined) {
+      return exchange(left - 1);
+    }
+    const location = placeOf(response.headers.location, target);
+    return {
+      status: response.statusCode,
+      ok: response.statusCode >= 200 && response.statusCode < 300,
+      body: decodeBody(text),
+      ...(location === undefined ? {} : { location }),
+    };
   };
+  const expired = new Promise<never>((_resolve, reject) =>
+    deadline.addEventListener(
+      'abort',
+      () => {
+        // undici does not honour the signal while a proxy tunnel is being
+        // set up, so the connections are torn down as well.
+        void own?.destroy();
+        reject(deadline.reason);
+      },
+      { once: true, signal: finished.signal },
+    ),
+  );
+  const attempt = exchange(retries);
+  attempt.catch(() => undefined);
   try {
-    const { status, text } = await exchange(retries);
-    const body = ((): unknown => {
-      try {
-        return text === '' ? undefined : JSON.parse(text);
-      } catch {
-        return text.slice(0, 500);
-      }
-    })();
-    return { status, ok: status >= 200 && status < 300, body };
+    return await Promise.race([attempt, expired]);
   } catch (error) {
-    throw new Error(
-      `Network error calling ${target.host}: ${messageOf(error)}`,
-    );
+    throw networkErrorFor(error, target.host);
+  } finally {
+    finished.abort();
+    await own?.destroy().catch(() => undefined);
   }
 }
 
@@ -436,13 +703,13 @@ function signAssertion(
  * here is ever logged.
  *
  * @param credentials Credentials from `resolveCredentials`.
- * @param agent The connections to use; defaults to new ones.
+ * @param agent The connections to use; tests pass a mock. Defaults to new ones.
  * @returns A short lived OAuth access token.
  * @throws If Google refuses the exchange.
  */
 export async function getAccessToken(
   credentials: Credentials,
-  agent: Dispatcher = connections(),
+  agent?: Dispatcher,
 ): Promise<string> {
   if (credentials.kind === 'accessToken') {
     return credentials.accessToken;
@@ -472,8 +739,13 @@ export async function getAccessToken(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(form).toString(),
     },
-    agent,
-    { retries: 2, retryPost: true },
+    {
+      agent,
+      retries: 2,
+      retryPost: true,
+      attemptTimeoutMs: 60000,
+      deadlineMs: 180000,
+    },
   ).catch((error: unknown) => {
     throw new SemanticReleaseError(
       `Could not reach Google to obtain an access token. ${messageOf(error)}`,
@@ -752,6 +1024,12 @@ function failure(action: Action, result: HttpResult): SemanticReleaseError {
   const text =
     stringAt(detail, 'message') ??
     (typeof result.body === 'string' ? result.body : 'no error message');
+  if (result.status >= 300 && result.status < 400) {
+    return new SemanticReleaseError(
+      `Chrome Web Store ${action} failed with HTTP ${result.status}: the request was redirected to ${result.location ?? 'no location'}. Redirects are never followed, because they could turn a state-changing call into a different request.`,
+      'EWEBSTOREHTTP',
+    );
+  }
   const [code, hint] = HINTS[result.status] ?? [
     'EWEBSTOREHTTP',
     'Check the Chrome Web Store status and the Developer Dashboard.',
@@ -774,10 +1052,7 @@ function failure(action: Action, result: HttpResult): SemanticReleaseError {
 export class WebStoreClient {
   private readonly name: string;
 
-  private readonly agent: Dispatcher;
-
   constructor(private readonly options: ClientOptions) {
-    this.agent = options.agent ?? connections();
     this.name = `publishers/${encodeURIComponent(options.publisherId)}/items/${encodeURIComponent(options.extensionId)}`;
   }
 
@@ -797,12 +1072,11 @@ export class WebStoreClient {
     readonly log?: (message: string) => void;
     readonly agent?: Dispatcher;
   }): Promise<WebStoreClient> {
-    const agent = options.agent ?? connections();
     return new WebStoreClient({
-      agent,
+      agent: options.agent,
       publisherId: options.publisherId,
       extensionId: options.extensionId,
-      accessToken: await getAccessToken(options.credentials, agent),
+      accessToken: await getAccessToken(options.credentials, options.agent),
       pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
       pollTimeoutMs: options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS,
       log: options.log,
@@ -820,16 +1094,19 @@ export class WebStoreClient {
     url: string,
     init: HttpRequest,
     parse: (body: unknown) => T,
-    options: { retries?: number; timeoutMs?: number } = {},
+    options: Omit<RequestOptions, 'agent'> = {},
   ): Promise<T> {
-    const result = await request(url, init, this.agent, options).catch(
-      (error: unknown) => {
-        throw new SemanticReleaseError(
-          `Chrome Web Store ${action} failed. ${messageOf(error)}`,
-          'EWEBSTORENETWORK',
-        );
-      },
-    );
+    const result = await request(url, init, {
+      agent: this.options.agent,
+      attemptTimeoutMs: 60000,
+      deadlineMs: 60000,
+      ...options,
+    }).catch((error: unknown) => {
+      throw new SemanticReleaseError(
+        `Chrome Web Store ${action} failed. ${messageOf(error)}`,
+        'EWEBSTORENETWORK',
+      );
+    });
     if (!result.ok) {
       throw failure(action, result);
     }
@@ -848,7 +1125,7 @@ export class WebStoreClient {
       `${API}/v2/${this.name}:fetchStatus`,
       { method: 'GET', headers: this.headers() },
       parseStatus,
-      { retries: 3, timeoutMs: 60000 },
+      { retries: 3, attemptTimeoutMs: 60000, deadlineMs: 240000 },
     );
   }
 
@@ -874,7 +1151,7 @@ export class WebStoreClient {
         body: zip,
       },
       parseUpload,
-      { timeoutMs: 600000 },
+      { attemptTimeoutMs: 600000, deadlineMs: 600000 },
     );
     if (response.uploadState === 'SUCCEEDED') {
       return response;
@@ -1069,8 +1346,6 @@ export interface ConnectionOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Receives progress messages. Silent by default. */
   readonly log?: (message: string) => void;
-  /** The connections to use; tests pass undici's `MockAgent`. */
-  readonly agent?: Dispatcher;
 }
 
 /**
@@ -1085,7 +1360,6 @@ async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
     extensionId: options.extensionId,
     credentials: await resolveCredentials(options.env ?? process.env),
     log: options.log,
-    agent: options.agent,
   });
 }
 

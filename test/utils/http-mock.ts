@@ -1,4 +1,6 @@
+import { beforeEach, jest } from '@jest/globals';
 import { MockAgent } from 'undici';
+import { WebStoreClient } from '../../src/webstore.js';
 import { isRecord } from '../../src/utils/object.js';
 
 interface Reply {
@@ -36,6 +38,23 @@ function install(): MockAgent {
   agent.disableNetConnect();
   return agent;
 }
+
+const realConnect = WebStoreClient.connect.bind(WebStoreClient);
+
+/**
+ * Fail closed: every test in a file that imports this helper starts with a
+ * mock agent that answers nothing, and every client that the steps connect
+ * is given it, so a test that forgets to mock a call fails instead of
+ * reaching the network.
+ */
+beforeEach(() => {
+  install();
+  jest
+    .spyOn(WebStoreClient, 'connect')
+    .mockImplementation((options) =>
+      realConnect({ ...options, agent: mockAgent() }),
+    );
+});
 
 /**
  * The agent set up by the last `mockHttp` or `failHttp`, to pass to the code

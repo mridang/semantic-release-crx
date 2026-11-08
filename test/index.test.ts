@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mockAgent, mockHttp } from './utils/http-mock.js';
+import { mockHttp } from './utils/http-mock.js';
 import {
   BASE,
   CONFIG,
@@ -63,9 +63,9 @@ describe('plugin entry point', () => {
         });
         const { context } = stepContext({ cwd: dir });
         const ctx = context as unknown as PublishContext;
-        await plugin.verifyConditions(CONFIG, ctx, mockAgent());
+        await plugin.verifyConditions(CONFIG, ctx);
         await plugin.prepare(CONFIG, ctx);
-        const release = await plugin.publish(CONFIG, ctx, mockAgent());
+        const release = await plugin.publish(CONFIG, ctx);
         expect(release?.url).toBe(
           'https://chromewebstore.google.com/detail/ext-1',
         );
@@ -104,14 +104,7 @@ describe('plugin entry point', () => {
         logger,
         options: {
           plugins: [
-            [
-              {
-                ...plugin,
-                addChannel: (config, context) =>
-                  plugin.addChannel(config, context, mockAgent()),
-              },
-              { ...CONFIG, promoteDeployPercentage: 30 },
-            ],
+            [{ ...plugin }, { ...CONFIG, promoteDeployPercentage: 30 }],
           ],
         },
       },
@@ -153,7 +146,6 @@ describe('verifyConditions', () => {
       result: verifyConditions(
         { ...CONFIG, ...config },
         context as unknown as VerifyConditionsContext,
-        mockAgent(),
       ),
     };
   };
@@ -177,7 +169,7 @@ describe('verifyConditions', () => {
       const { result, lines } = run({});
       await result;
       expect(calls).toHaveLength(1);
-      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+      expect(calls[0].headers.authorization).toBe('Bearer SECRET-TOKEN');
       expect(lines).toContain('Chrome Web Store credentials are valid.');
     });
 
@@ -263,7 +255,7 @@ describe('verifyConditions', () => {
         },
       );
       await result;
-      expect(calls[1].headers.Authorization).toBe('Bearer minted');
+      expect(calls[1].headers.authorization).toBe('Bearer minted');
     });
 
     it('fails clearly when the store rejects the credentials, without leaking them', async () => {
@@ -515,7 +507,6 @@ describe('publish', () => {
       result: publish(
         { ...CONFIG, ...config },
         context as unknown as PublishContext,
-        mockAgent(),
       ),
     };
   };
@@ -561,7 +552,6 @@ describe('publish', () => {
           });
           await expect(run(dir).result).rejects.toBeDefined();
           expect(calls.some((c) => c.url.endsWith(':publish'))).toBe(false);
-          jest.restoreAllMocks();
         }
       });
     });
@@ -767,7 +757,6 @@ describe('publish', () => {
           await expect(run(dir).result).rejects.toMatchObject({
             code: 'EPUBLISHSTATE',
           });
-          jest.restoreAllMocks();
         }
       });
     });
@@ -782,7 +771,6 @@ describe('publish', () => {
         ]) {
           mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
           expect((await run(dir).result)?.url).toContain('ext-1');
-          jest.restoreAllMocks();
         }
       });
     });
@@ -1137,7 +1125,6 @@ describe('addChannel', () => {
       result: addChannel(
         { ...CONFIG, ...config },
         context as unknown as AddChannelContext,
-        mockAgent(),
       ),
     };
   };
@@ -1166,7 +1153,7 @@ describe('addChannel', () => {
       });
       expect(calls).toHaveLength(1);
       expect(calls[0].body).toEqual({ deployPercentage: 50 });
-      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+      expect(calls[0].headers.authorization).toBe('Bearer SECRET-TOKEN');
       expect(lines.join('\n')).not.toContain('SECRET-TOKEN');
     });
 
@@ -1245,7 +1232,7 @@ describe('addChannel', () => {
           },
           { env: undefined },
         ).result;
-        expect(calls[0].headers.Authorization).toBe('Bearer ENV-TOKEN');
+        expect(calls[0].headers.authorization).toBe('Bearer ENV-TOKEN');
       } finally {
         process.env = saved;
       }

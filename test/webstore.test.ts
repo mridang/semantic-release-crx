@@ -1,24 +1,20 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   WebStoreClient,
-  connections,
+  type RequestOptions,
   getAccessToken,
   request,
   resolveCredentials,
 } from '../src/webstore.js';
 import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
 import { startTunnelProxy } from './utils/proxy.js';
+import { listen, startFaultyProxy } from './utils/server.js';
+import { inspect } from 'node:util';
 import {
   createPublicKey,
   createVerify,
   generateKeyPairSync,
 } from 'node:crypto';
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from 'node:http';
 import { join } from 'node:path';
 import { withTmp } from './utils/tmpdir.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
@@ -51,8 +47,8 @@ describe('WebStoreClient.upload', () => {
     expect(result.crxVersion).toBe('1.2.3');
     expect(calls).toHaveLength(1);
     expect(calls[0].headers).toMatchObject({
-      Authorization: 'Bearer SECRET-TOKEN',
-      'Content-Type': 'application/zip',
+      authorization: 'Bearer SECRET-TOKEN',
+      'content-type': 'application/zip',
     });
     expect(Buffer.from(calls[0].body as Uint8Array).equals(zip)).toBe(true);
   });
@@ -341,7 +337,7 @@ describe('WebStoreClient promotion, cancel and rollback', () => {
       ['rollback', { rollbackReason: 'r', newVersion: '2' }],
     ]);
     expect(
-      calls.every((c) => c.headers['Content-Type'] === 'application/json'),
+      calls.every((c) => c.headers['content-type'] === 'application/json'),
     ).toBe(true);
   });
 
@@ -721,10 +717,15 @@ describe('auth', () => {
 describe('request', () => {
   const GET = 'GET https://x.test/a';
   const URL_A = 'https://x.test/a';
+  const via = (extra: RequestOptions = {}): RequestOptions => ({
+    agent: mockAgent(),
+    minTimeout: 1,
+    ...extra,
+  });
 
   it('decodes a JSON body', async () => {
     mockHttp({ [GET]: { json: { ok: 1 } } });
-    expect(await request(URL_A, {}, mockAgent())).toEqual({
+    expect(await request(URL_A, {}, via())).toEqual({
       status: 200,
       ok: true,
       body: { ok: 1 },
@@ -733,7 +734,7 @@ describe('request', () => {
 
   it('falls back to text for a body that is not JSON', async () => {
     mockHttp({ [GET]: { status: 502, text: '<html>bad</html>' } });
-    expect(await request(URL_A, {}, mockAgent())).toMatchObject({
+    expect(await request(URL_A, {}, via())).toMatchObject({
       status: 502,
       ok: false,
       body: '<html>bad</html>',
@@ -742,16 +743,20 @@ describe('request', () => {
 
   it('returns an undefined body for an empty response', async () => {
     mockHttp({ [GET]: {} });
-    expect((await request(URL_A, {}, mockAgent())).body).toBeUndefined();
+    expect((await request(URL_A, {}, via())).body).toBeUndefined();
   });
 
-  it('sends the Accept and User-Agent headers that fetch used to send', async () => {
+  it('sends the default headers once, whatever the case of an override', async () => {
     const calls = mockHttp({ [GET]: {} });
-    await request(URL_A, { headers: { 'X-Extra': '1' } }, mockAgent());
-    expect(calls[0].headers).toMatchObject({
-      accept: 'application/json',
+    await request(
+      URL_A,
+      { headers: { Accept: 'text/plain', 'X-Extra': '1' } },
+      via(),
+    );
+    expect(calls[0].headers).toEqual({
+      accept: 'text/plain',
       'user-agent': 'semantic-release-crx',
-      'X-Extra': '1',
+      'x-extra': '1',
     });
   });
 
@@ -759,49 +764,59 @@ describe('request', () => {
     const calls = mockHttp({
       [GET]: [{ status: 429 }, { status: 503 }, { json: { ok: 1 } }],
     });
-    const result = await request(URL_A, {}, mockAgent(), { retries: 2 });
+    const result = await request(URL_A, {}, via({ retries: 2 }));
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(3);
   });
 
   it('returns the last response once the retries are used up', async () => {
     const calls = mockHttp({ [GET]: { status: 503, text: 'down' } });
-    const result = await request(URL_A, {}, mockAgent(), { retries: 2 });
+    const result = await request(URL_A, {}, via({ retries: 2 }));
     expect(result).toMatchObject({ status: 503, ok: false, body: 'down' });
     expect(calls).toHaveLength(3);
+  });
+
+  it('retries an idempotent method other than GET', async () => {
+    const calls = mockHttp({
+      'PUT https://x.test/a': [{ status: 500 }, { json: {} }],
+    });
+    await request(URL_A, { method: 'PUT' }, via({ retries: 1 }));
+    expect(calls).toHaveLength(2);
   });
 
   it('retries a POST only when retryPost is set, as the token exchange does', async () => {
     const calls = mockHttp({
       'POST https://x.test/a': [{ status: 500 }, { json: { ok: 1 } }],
     });
-    const result = await request(URL_A, { method: 'POST' }, mockAgent(), {
-      retries: 1,
-      retryPost: true,
-    });
+    const result = await request(
+      URL_A,
+      { method: 'POST' },
+      via({ retries: 1, retryPost: true }),
+    );
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(2);
   });
 
   it('never retries a POST without retryPost, whatever retries says', async () => {
     const calls = mockHttp({ 'POST https://x.test/a': { status: 503 } });
-    const result = await request(URL_A, { method: 'POST' }, mockAgent(), {
-      retries: 3,
-    });
+    const result = await request(
+      URL_A,
+      { method: 'POST' },
+      via({ retries: 3 }),
+    );
     expect(result.status).toBe(503);
     expect(calls).toHaveLength(1);
   });
 
   it('does not retry unless asked to', async () => {
     const calls = mockHttp({ [GET]: { status: 503 } });
-    const result = await request(URL_A, {}, mockAgent());
-    expect(result.status).toBe(503);
+    expect((await request(URL_A, {}, via())).status).toBe(503);
     expect(calls).toHaveLength(1);
   });
 
   it('does not retry a client error', async () => {
     const calls = mockHttp({ [GET]: { status: 404 } });
-    await request(URL_A, {}, mockAgent(), { retries: 3 });
+    await request(URL_A, {}, via({ retries: 3 }));
     expect(calls).toHaveLength(1);
   });
 
@@ -810,14 +825,14 @@ describe('request', () => {
       'https://x.test',
       Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
     );
-    await expect(
-      request(
-        'https://x.test/a?token=secret',
-        { headers: { Authorization: 'Bearer secret' } },
-        mockAgent(),
-        { retries: 1 },
-      ),
-    ).rejects.toThrow('Network error calling x.test: socket hang up');
+    const error = await request(
+      'https://x.test/a?token=secret',
+      { headers: { Authorization: 'Bearer secret' } },
+      via({ retries: 1 }),
+    ).catch((e: unknown) => e);
+    expect(String(error)).toBe(
+      'Error: Network error calling x.test: socket hang up',
+    );
     expect(attempts()).toBe(2);
   });
 
@@ -826,9 +841,9 @@ describe('request', () => {
       'https://x.test',
       Object.assign(new Error('denied'), { code: 'EACCES' }),
     );
-    await expect(
-      request(URL_A, {}, mockAgent(), { retries: 2 }),
-    ).rejects.toThrow('Network error calling x.test: denied');
+    await expect(request(URL_A, {}, via({ retries: 2 }))).rejects.toThrow(
+      'Network error calling x.test: denied',
+    );
     expect(attempts()).toBe(1);
   });
 
@@ -839,79 +854,78 @@ describe('request', () => {
         code: 'ECONNREFUSED',
       }),
     );
-    await expect(request(URL_A, {}, mockAgent())).rejects.toThrow(
+    await expect(request(URL_A, {}, via())).rejects.toThrow(
       'Network error calling x.test: ECONNREFUSED',
     );
+  });
+
+  it('refuses a malformed proxy setting without printing it', async () => {
+    const saved = { ...process.env };
+    process.env.HTTPS_PROXY = 'http://user:PW-SECRET@bad host:3128';
+    try {
+      const error = await request(URL_A, {}).catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: 'EPROXY' });
+      const shown = [
+        String(error),
+        inspect(error, { depth: 10, showHidden: true }),
+        JSON.stringify(error, Object.getOwnPropertyNames(error)),
+        JSON.stringify(Object.entries(error as object)),
+      ].join('\n');
+      expect(shown).not.toContain('PW-SECRET');
+      expect(shown).toContain('HTTPS_PROXY');
+    } finally {
+      process.env = saved;
+    }
   });
 });
 
 describe('request over a real socket', () => {
-  const servers: Server[] = [];
+  const stops: (() => Promise<void>)[] = [];
   const saved = { ...process.env };
 
-  const listen = async (
-    handler: (req: IncomingMessage, res: ServerResponse) => void,
-  ): Promise<{ url: string; port: number; seen: string[] }> => {
-    const seen: string[] = [];
-    const server = createServer((req, res) => {
-      seen.push(`${req.method} ${req.url} ${req.headers.range ?? ''}`.trim());
-      handler(req, res);
-    });
-    servers.push(server);
-    await new Promise<void>((resolve) =>
-      server.listen(0, '127.0.0.1', resolve),
-    );
-    const address = server.address();
-    const port = typeof address === 'object' && address ? address.port : 0;
-    return { url: `http://127.0.0.1:${port}`, port, seen };
+  const serve = async (
+    handler: Parameters<typeof listen>[0],
+  ): ReturnType<typeof listen> => {
+    const server = await listen(handler);
+    stops.push(server.close);
+    return server;
   };
 
   afterEach(async () => {
     process.env = { ...saved };
-    await Promise.all(
-      servers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            server.closeAllConnections();
-            server.close(() => resolve());
-          }),
-      ),
-    );
+    await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
   it('honours Retry-After before retrying', async () => {
-    const { url, seen } = await listen((_req, res) => {
+    const { url, seen } = await serve((_req, res) => {
       const first = seen.length === 1;
       res.writeHead(first ? 503 : 200, first ? { 'Retry-After': '1' } : {});
       res.end(first ? 'busy' : '{"ok":1}');
     });
     const started = Date.now();
-    const result = await request(`${url}/a`, {}, connections(), {
-      retries: 1,
-    });
+    const result = await request(`${url}/a`, {}, { retries: 1 });
     expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
     expect(seen).toHaveLength(2);
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
   });
 
-  it('caps a long Retry-After at the call timeout, so the process is not held', async () => {
-    const { url, seen } = await listen((_req, res) => {
+  it('caps a long Retry-After at a quarter of the deadline', async () => {
+    const { url, seen } = await serve((_req, res) => {
       const first = seen.length === 1;
       res.writeHead(first ? 429 : 200, first ? { 'Retry-After': '20' } : {});
       res.end('{}');
     });
     const started = Date.now();
-    await request(`${url}/a`, {}, connections(), {
-      retries: 1,
-      timeoutMs: 300,
-    });
+    await request(`${url}/a`, {}, { retries: 1, deadlineMs: 4000 });
+    const took = Date.now() - started;
     expect(seen).toHaveLength(2);
-    expect(Date.now() - started).toBeLessThan(3000);
+    expect(took).toBeGreaterThanOrEqual(900);
+    expect(took).toBeLessThan(3000);
   });
 
   it('sends a retried POST body again, intact', async () => {
     const bodies: string[] = [];
-    const { url } = await listen((req, res) => {
+    const { url } = await serve((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => {
@@ -923,8 +937,7 @@ describe('request over a real socket', () => {
     const result = await request(
       `${url}/token`,
       { method: 'POST', body: 'grant_type=x' },
-      connections(),
-      { retries: 1, retryPost: true },
+      { retries: 1, retryPost: true, minTimeout: 1 },
     );
     expect(result.ok).toBe(true);
     expect(bodies).toEqual(['grant_type=x', 'grant_type=x']);
@@ -932,53 +945,78 @@ describe('request over a real socket', () => {
 
   it('sends an upload body with its content length', async () => {
     const lengths: (string | undefined)[] = [];
-    const { url } = await listen((req, res) => {
+    const { url } = await serve((req, res) => {
       lengths.push(req.headers['content-length']);
       req.resume();
       req.on('end', () => res.end('{}'));
     });
     const zip = Buffer.from('zip-bytes');
-    await request(
-      `${url}/up`,
-      {
-        method: 'POST',
-        headers: { 'Content-Length': String(zip.length) },
-        body: zip,
-      },
-      connections(),
-    );
+    await request(`${url}/up`, {
+      method: 'POST',
+      headers: { 'Content-Length': String(zip.length) },
+      body: zip,
+    });
     expect(lengths).toEqual(['9']);
   });
 
   it('retries an attempt that stalls, as a dropped connection is', async () => {
-    const { url, seen } = await listen((_req, res) => {
-      if (seen.length === 1) {
-        return;
+    const { url, seen } = await serve((_req, res) => {
+      if (seen.length > 1) {
+        res.end('{"ok":1}');
       }
-      res.end('{"ok":1}');
     });
-    const result = await request(`${url}/a`, {}, connections(), {
-      retries: 1,
-      timeoutMs: 1000,
-    });
+    const result = await request(
+      `${url}/a`,
+      {},
+      { retries: 1, attemptTimeoutMs: 1000, minTimeout: 1 },
+    );
     expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
     expect(seen).toHaveLength(2);
-  });
+  }, 15000);
 
-  it('gives up when every attempt stalls', async () => {
-    const { url, seen } = await listen(() => undefined);
+  it('gives up with one request per attempt when every attempt stalls', async () => {
+    const { url, seen } = await serve(() => undefined);
     await expect(
-      request(`${url}/a`, {}, connections(), { retries: 1, timeoutMs: 1000 }),
+      request(
+        `${url}/a`,
+        {},
+        { retries: 1, attemptTimeoutMs: 1000, minTimeout: 1 },
+      ),
     ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
     expect(seen).toHaveLength(2);
-  });
+  }, 15000);
 
-  it('sends the whole request again, not a Range resume, when the body is cut short', async () => {
-    const { url, seen } = await listen((_req, res) => {
+  it('stops at the deadline, which does not include a back-off when nothing is retried', async () => {
+    const { url } = await serve(() => undefined);
+    const started = Date.now();
+    await expect(request(`${url}/a`, {}, { deadlineMs: 1000 })).rejects.toThrow(
+      /aborted due to timeout/,
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+  }, 15000);
+
+  it('sends exactly retries + 1 whole requests when the body is always cut short', async () => {
+    const { url, seen } = await serve((_req, res) => {
+      res.writeHead(200, { 'Content-Length': '100' });
+      res.write('{"par');
+      setTimeout(() => res.socket?.destroy(), 10);
+    });
+    await expect(
+      request(
+        `${url}/a`,
+        { method: 'POST', body: 'a=1' },
+        { retries: 2, retryPost: true, minTimeout: 1 },
+      ),
+    ).rejects.toThrow(/other side closed/);
+    expect(seen).toEqual(['POST /a', 'POST /a', 'POST /a']);
+  }, 15000);
+
+  it('sends the whole request again, never a Range resume, when the body is cut once', async () => {
+    const { url, seen } = await serve((_req, res) => {
       if (seen.length === 1) {
         res.writeHead(200, { 'Content-Length': '100' });
         res.write('{"par');
-        setTimeout(() => res.socket?.destroy(), 20);
+        setTimeout(() => res.socket?.destroy(), 10);
         return;
       }
       res.end('{"ok":1}');
@@ -986,80 +1024,114 @@ describe('request over a real socket', () => {
     const result = await request(
       `${url}/a`,
       { method: 'POST', body: 'a=1' },
-      connections(),
-      { retries: 2, retryPost: true },
+      { retries: 2, retryPost: true, minTimeout: 1 },
     );
     expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
-    expect(seen.at(-1)).not.toMatch(/bytes=/);
+    expect(seen).toEqual(['POST /a', 'POST /a']);
+  });
+
+  it('reports a body that is cut short when the request may not be retried', async () => {
+    const { url, seen } = await serve((_req, res) => {
+      res.writeHead(200, { 'Content-Length': '100' });
+      res.write('{"par');
+      setTimeout(() => res.socket?.destroy(), 10);
+    });
+    await expect(
+      request(`${url}/a`, { method: 'POST', body: 'a=1' }, { retries: 3 }),
+    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('does not read, or repeat a request for, a body larger than the cap', async () => {
+    const { url, seen } = await serve((_req, res) => {
+      res.writeHead(200);
+      res.end(Buffer.alloc(33 * 1024 * 1024, 97));
+    });
+    await expect(
+      request(`${url}/a`, {}, { retries: 2, minTimeout: 1 }),
+    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('never follows a redirect and reports where it pointed, without the query', async () => {
+    const { url, seen } = await serve((_req, res) => {
+      res.writeHead(302, { Location: '/elsewhere?token=SECRET' });
+      res.end();
+    });
+    const result = await request(`${url}/a`, {
+      method: 'POST',
+      body: 'a=1',
+    });
+    expect(result).toMatchObject({
+      status: 302,
+      ok: false,
+      location: `${url}/elsewhere`,
+    });
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    expect(seen).toEqual(['POST /a']);
   });
 
   it('names the code when a closed local port refuses the connection, without leaking the URL', async () => {
-    const { port } = await listen(() => undefined);
-    await Promise.all(
-      servers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          }),
-      ),
-    );
+    const server = await listen(() => undefined);
+    await server.close();
     const error = await request(
-      `http://localhost:${port}/a?token=SECRET`,
+      `http://localhost:${server.port}/a?token=SECRET`,
       { headers: { Authorization: 'Bearer SECRET' } },
-      connections(),
     ).catch((e: unknown) => e);
     expect(String(error)).toContain('ECONNREFUSED');
     expect(String(error)).not.toContain('SECRET');
   });
 
-  it('reports a body that is cut short when the request may not be retried', async () => {
-    const { url } = await listen((_req, res) => {
-      res.writeHead(200, { 'Content-Length': '100' });
-      res.write('{"par');
-      setTimeout(() => res.socket?.destroy(), 20);
-    });
-    await expect(
-      request(`${url}/a`, { method: 'POST', body: 'a=1' }, connections(), {
-        retries: 3,
-      }),
-    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+  it('goes through the proxy named by the environment', async () => {
+    const target = await serve((_req, res) => res.end('{"direct":1}'));
+    const proxy = await startTunnelProxy(target.port);
+    stops.push(proxy.close);
+    process.env.HTTP_PROXY = proxy.url;
+    process.env.NO_PROXY = '';
+    delete process.env.http_proxy;
+    delete process.env.no_proxy;
+    const result = await request('http://something.invalid/a', {});
+    expect(result.body).toEqual({ direct: 1 });
+    expect(proxy.tunnelled).toEqual(['something.invalid:80']);
   });
 
-  it('goes through the proxy named by the environment', async () => {
-    const target = await listen((_req, res) => res.end('{"direct":1}'));
+  it('skips the proxy for hosts listed in NO_PROXY', async () => {
+    const target = await serve((_req, res) => res.end('{"direct":1}'));
     const proxy = await startTunnelProxy(target.port);
-    try {
+    stops.push(proxy.close);
+    process.env.HTTP_PROXY = proxy.url;
+    process.env.NO_PROXY = '127.0.0.1';
+    delete process.env.http_proxy;
+    delete process.env.no_proxy;
+    const result = await request(`${target.url}/a`, {});
+    expect(result.body).toEqual({ direct: 1 });
+    expect(proxy.tunnelled).toHaveLength(0);
+  });
+
+  it.each(['reset', 'stall'] as const)(
+    'gives up at the deadline when the proxy accepts CONNECT and then %ss, and stays idle',
+    async (mode) => {
+      const proxy = await startFaultyProxy(mode);
+      stops.push(proxy.close);
       process.env.HTTP_PROXY = proxy.url;
       process.env.NO_PROXY = '';
       delete process.env.http_proxy;
       delete process.env.no_proxy;
-      const result = await request(
-        'http://something.invalid/a',
-        {},
-        connections(),
-      );
-      expect(result.body).toEqual({ direct: 1 });
-      expect(proxy.tunnelled).toEqual(['something.invalid:80']);
-    } finally {
-      await proxy.close();
-    }
-  });
-
-  it('skips the proxy for hosts listed in NO_PROXY', async () => {
-    const target = await listen((_req, res) => res.end('{"direct":1}'));
-    const proxy = await startTunnelProxy(target.port);
-    try {
-      process.env.HTTP_PROXY = proxy.url;
-      process.env.NO_PROXY = '127.0.0.1';
-      delete process.env.http_proxy;
-      delete process.env.no_proxy;
-      const result = await request(`${target.url}/a`, {}, connections());
-      expect(result.body).toEqual({ direct: 1 });
-      expect(proxy.tunnelled).toHaveLength(0);
-    } finally {
-      await proxy.close();
-    }
-  });
+      const started = Date.now();
+      await expect(
+        request(
+          'http://something.invalid/a',
+          {},
+          { retries: 1, deadlineMs: 1500, minTimeout: 1 },
+        ),
+      ).rejects.toThrow(/Network error calling something\.invalid/);
+      expect(Date.now() - started).toBeLessThan(4000);
+      const connects = proxy.connects();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(proxy.connects()).toBe(connects);
+    },
+    15000,
+  );
 });
 
 describe('client', () => {
@@ -1107,7 +1179,7 @@ describe('client', () => {
         targetCrxVersion: '1.1.0',
         validateOnly: true,
       });
-      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+      expect(calls[0].headers.authorization).toBe('Bearer SECRET-TOKEN');
     });
 
     it('leaves out the optional fields that were not given', async () => {
@@ -1355,7 +1427,7 @@ describe('WebStoreClient.connect', () => {
       agent: mockAgent(),
     });
     await client.fetchStatus();
-    expect(calls[1].headers.Authorization).toBe('Bearer minted');
+    expect(calls[1].headers.authorization).toBe('Bearer minted');
   });
 });
 
@@ -1398,6 +1470,6 @@ describe('WebStoreClient.connect', () => {
       agent: mockAgent(),
     });
     await client.fetchStatus();
-    expect(calls[1].headers.Authorization).toBe('Bearer minted');
+    expect(calls[1].headers.authorization).toBe('Bearer minted');
   });
 });
