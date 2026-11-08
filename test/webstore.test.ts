@@ -1,9 +1,18 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import {
   WebStoreClient,
+  createDispatcher,
   getAccessToken,
   request,
   resolveCredentials,
+  setDispatcher,
 } from '../src/webstore.js';
 import { failFetch, mockFetch } from './utils/fetch-mock.js';
 import {
@@ -11,7 +20,15 @@ import {
   createVerify,
   generateKeyPairSync,
 } from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
+import { connect } from 'node:net';
 import { join } from 'node:path';
+import type { Duplex } from 'node:stream';
 import { withTmp } from './utils/tmpdir.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
 import * as client from '../src/webstore.js';
@@ -828,6 +845,147 @@ describe('http', () => {
         request('https://x.test/a', {}, { timeoutMs: 20 }),
       ).rejects.toThrow(/aborted/);
     });
+  });
+});
+
+describe('request over a real socket', () => {
+  const servers: Server[] = [];
+
+  const listen = async (
+    handler: (req: IncomingMessage, res: ServerResponse) => void,
+  ): Promise<{ url: string; seen: string[] }> => {
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      handler(req, res);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    return { url: `http://127.0.0.1:${port}`, seen };
+  };
+
+  const listenProxy = async (): Promise<{ url: string; seen: string[] }> => {
+    const seen: string[] = [];
+    const server = createServer();
+    server.on('connect', (req, client: Duplex, head) => {
+      seen.push(req.url ?? '');
+      const [host, port] = (req.url ?? '').split(':');
+      const upstream = connect(Number(port), host, () => {
+        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        upstream.write(head);
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      upstream.on('error', () => client.destroy());
+      client.on('error', () => upstream.destroy());
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    return { url: `http://127.0.0.1:${port}`, seen };
+  };
+
+  beforeEach(() => {
+    setDispatcher(createDispatcher());
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      servers
+        .splice(0)
+        .map((server) => new Promise((resolve) => server.close(resolve))),
+    );
+  });
+
+  it('honours Retry-After before retrying', async () => {
+    const { url, seen } = await listen((_req, res) => {
+      const first = seen.length === 1;
+      res.writeHead(first ? 503 : 200, first ? { 'Retry-After': '1' } : {});
+      res.end(first ? 'busy' : '{"ok":1}');
+    });
+    const started = Date.now();
+    const result = await request(`${url}/a`, {}, { retries: 1 });
+    expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
+    expect(seen).toHaveLength(2);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  it('sends a retried POST body again, intact', async () => {
+    const bodies: string[] = [];
+    const { url } = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks).toString());
+        res.writeHead(bodies.length === 1 ? 503 : 200);
+        res.end('{}');
+      });
+    });
+    const result = await request(
+      `${url}/token`,
+      { method: 'POST', body: 'grant_type=x' },
+      { retries: 1 },
+    );
+    expect(result.ok).toBe(true);
+    expect(bodies).toEqual(['grant_type=x', 'grant_type=x']);
+  });
+
+  it('sends an upload body with its content length', async () => {
+    const lengths: (string | undefined)[] = [];
+    const { url } = await listen((req, res) => {
+      lengths.push(req.headers['content-length']);
+      req.resume();
+      req.on('end', () => res.end('{}'));
+    });
+    const zip = Buffer.from('zip-bytes');
+    await request(`${url}/up`, {
+      method: 'POST',
+      headers: { 'Content-Length': String(zip.length) },
+      body: zip,
+    });
+    expect(lengths).toEqual(['9']);
+  });
+
+  it('goes through the proxy named by the environment', async () => {
+    const target = await listen((_req, res) => res.end('{"direct":1}'));
+    const proxy = await listenProxy();
+    const saved = { ...process.env };
+    process.env.HTTP_PROXY = proxy.url;
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    delete process.env.http_proxy;
+    try {
+      setDispatcher(createDispatcher());
+    } finally {
+      process.env = saved;
+    }
+    const result = await request(`${target.url}/a`, {});
+    expect(result.body).toEqual({ direct: 1 });
+    expect(proxy.seen).toEqual([target.url.replace('http://', '')]);
+  });
+
+  it('skips the proxy for hosts listed in NO_PROXY', async () => {
+    const target = await listen((_req, res) => res.end('{"direct":1}'));
+    const proxy = await listenProxy();
+    const saved = { ...process.env };
+    process.env.HTTP_PROXY = proxy.url;
+    process.env.NO_PROXY = '127.0.0.1';
+    delete process.env.no_proxy;
+    try {
+      setDispatcher(createDispatcher());
+      const result = await request(`${target.url}/a`, {});
+      expect(result.body).toEqual({ direct: 1 });
+      expect(proxy.seen).toHaveLength(0);
+    } finally {
+      process.env = saved;
+    }
   });
 });
 

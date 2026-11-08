@@ -1,7 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import SemanticReleaseError from '@semantic-release/error';
-import { Agent, RetryAgent, request as send, type Dispatcher } from 'undici';
+import {
+  EnvHttpProxyAgent,
+  RetryAgent,
+  request as send,
+  type Dispatcher,
+} from 'undici';
 import { fromBase64 } from './utils/base64.js';
 import { messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
@@ -40,13 +45,25 @@ const RETRYABLE_ERROR_CODES = [
 ];
 
 /**
- * The dispatcher every call goes through. It is undici's own `Agent` rather
- * than `getGlobalDispatcher()`: that slot is shared with the runtime's bundled
+ * Create the dispatcher requests are sent through: undici's
+ * `EnvHttpProxyAgent`, which honours `HTTP_PROXY`, `HTTPS_PROXY` and
+ * `NO_PROXY` (read when it is created) the way Node's built-in fetch does
+ * under `NODE_USE_ENV_PROXY`. It is undici's own agent rather than
+ * `getGlobalDispatcher()`: that slot is shared with the runtime's bundled
  * undici, which may be a different version whose dispatcher a `RetryAgent`
- * cannot wrap ("invalid onError method"). One agent is reused so connections
- * are pooled. Only tests replace it, through `setDispatcher`.
+ * cannot wrap ("invalid onError method").
+ *
+ * @returns A new proxy-aware dispatcher.
  */
-const transport: { base: Dispatcher } = { base: new Agent() };
+export function createDispatcher(): Dispatcher {
+  return new EnvHttpProxyAgent();
+}
+
+/**
+ * The dispatcher every call goes through; one is reused so connections are
+ * pooled. Only tests replace it, through `setDispatcher`.
+ */
+const transport: { base: Dispatcher } = { base: createDispatcher() };
 
 /**
  * Replace the dispatcher that requests are sent through, so tests can use
