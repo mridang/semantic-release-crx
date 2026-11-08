@@ -44,7 +44,7 @@ const RETRYABLE_ERROR_CODES = [
  * than `getGlobalDispatcher()`: that slot is shared with the runtime's bundled
  * undici, which may be a different version whose dispatcher a `RetryAgent`
  * cannot wrap ("invalid onError method"). One agent is reused so connections
- * are pooled. Only tests replace it, through `useDispatcher`.
+ * are pooled. Only tests replace it, through `setDispatcher`.
  */
 const transport: { base: Dispatcher } = { base: new Agent() };
 
@@ -54,7 +54,7 @@ const transport: { base: Dispatcher } = { base: new Agent() };
  *
  * @param dispatcher The dispatcher to send requests through from now on.
  */
-export function useDispatcher(dispatcher: Dispatcher): void {
+export function setDispatcher(dispatcher: Dispatcher): void {
   transport.base = dispatcher;
 }
 
