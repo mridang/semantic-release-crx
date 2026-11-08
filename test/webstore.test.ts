@@ -5,7 +5,7 @@ import {
   request,
   resolveCredentials,
 } from '../src/webstore.js';
-import { mockFetch } from './utils/fetch-mock.js';
+import { failFetch, mockFetch } from './utils/fetch-mock.js';
 import {
   createPublicKey,
   createVerify,
@@ -43,6 +43,14 @@ describe('WebStoreClient.upload', () => {
       'Content-Type': 'application/zip',
     });
     expect(Buffer.from(calls[0].body as Uint8Array).equals(zip)).toBe(true);
+  });
+
+  it('never retries, so an upload cannot run twice', async () => {
+    const calls = mockFetch({ [UPLOAD]: { status: 503 } });
+    await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
+      code: 'EWEBSTOREHTTP',
+    });
+    expect(calls).toHaveLength(1);
   });
 
   it('polls fetchStatus while the upload is in progress, then succeeds', async () => {
@@ -177,7 +185,7 @@ describe('WebStoreClient errors', () => {
   });
 
   it('reports network failures as EWEBSTORENETWORK', async () => {
-    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+    failFetch(BASE, new Error('offline'));
     await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
       code: 'EWEBSTORENETWORK',
     });
@@ -217,6 +225,14 @@ describe('WebStoreClient.fetchStatus', () => {
 });
 
 describe('WebStoreClient.publish', () => {
+  it('never retries, so a publish cannot run twice', async () => {
+    const calls = mockFetch({ [PUBLISH]: { status: 503 } });
+    await expect(
+      make().publish({ publishType: 'DEFAULT_PUBLISH' }),
+    ).rejects.toMatchObject({ code: 'EWEBSTOREHTTP' });
+    expect(calls).toHaveLength(1);
+  });
+
   it('posts the publish options as JSON and returns the state', async () => {
     const calls = mockFetch({
       [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
@@ -552,6 +568,21 @@ describe('auth', () => {
       expect(calls).toHaveLength(0);
     });
 
+    it('retries the token exchange on a server error', async () => {
+      const calls = mockFetch({
+        [TOKEN]: [{ status: 503 }, { json: { access_token: 'fresh' } }],
+      });
+      const token = await getAccessToken({
+        kind: 'oauth',
+        clientId: 'id',
+        clientSecret: 'secret',
+        refreshToken: 'refresh',
+      });
+      expect(token).toBe('fresh');
+      expect(calls).toHaveLength(2);
+      expect(calls[1].body).toEqual(calls[0].body);
+    });
+
     it('exchanges a refresh token', async () => {
       const calls = mockFetch({ [TOKEN]: { json: { access_token: 'fresh' } } });
       const token = await getAccessToken({
@@ -627,7 +658,7 @@ describe('auth', () => {
     });
 
     it('reports a network failure without leaking the request', async () => {
-      jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+      failFetch('https://oauth2.googleapis.com', new Error('offline'));
       const error = await getAccessToken({
         kind: 'oauth',
         clientId: 'id',
@@ -717,6 +748,31 @@ describe('http', () => {
       expect(calls).toHaveLength(3);
     });
 
+    it('returns the last response once the retries are used up', async () => {
+      const calls = mockFetch({
+        'GET https://x.test/a': {
+          status: 503,
+          text: 'down',
+        },
+      });
+      const result = await request('https://x.test/a', {}, { retries: 2 });
+      expect(result).toMatchObject({ status: 503, ok: false, body: 'down' });
+      expect(calls).toHaveLength(3);
+    });
+
+    it('retries a POST when it is given retries, as the token exchange is', async () => {
+      const calls = mockFetch({
+        'POST https://x.test/a': [{ status: 500 }, { json: { ok: 1 } }],
+      });
+      const result = await request(
+        'https://x.test/a',
+        { method: 'POST' },
+        { retries: 1 },
+      );
+      expect(result.ok).toBe(true);
+      expect(calls).toHaveLength(2);
+    });
+
     it('does not retry unless asked to', async () => {
       const calls = mockFetch({ 'POST https://x.test/a': { status: 503 } });
       const result = await request('https://x.test/a', { method: 'POST' });
@@ -730,10 +786,11 @@ describe('http', () => {
       expect(calls).toHaveLength(1);
     });
 
-    it('retries a network failure, then gives up with a message free of secrets', async () => {
-      const spy = jest
-        .spyOn(globalThis, 'fetch')
-        .mockRejectedValue(new Error('socket hang up'));
+    it('retries a dropped connection, then gives up with a message free of secrets', async () => {
+      const attempts = failFetch(
+        'https://x.test',
+        Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+      );
       await expect(
         request(
           'https://x.test/a?token=secret',
@@ -741,18 +798,22 @@ describe('http', () => {
           { retries: 1 },
         ),
       ).rejects.toThrow('Network error calling x.test: socket hang up');
-      expect(spy).toHaveBeenCalledTimes(2);
+      expect(attempts()).toBe(2);
+    });
+
+    it('does not retry an error code that is not a connection failure', async () => {
+      const attempts = failFetch(
+        'https://x.test',
+        Object.assign(new Error('denied'), { code: 'EACCES' }),
+      );
+      await expect(
+        request('https://x.test/a', {}, { retries: 2 }),
+      ).rejects.toThrow('Network error calling x.test: denied');
+      expect(attempts()).toBe(1);
     });
 
     it('aborts a request that takes longer than the timeout', async () => {
-      jest.spyOn(globalThis, 'fetch').mockImplementation(
-        (_url, init) =>
-          new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () =>
-              reject(new Error('aborted')),
-            );
-          }),
-      );
+      mockFetch({ 'GET https://x.test/a': { delayMs: 300 } });
       await expect(
         request('https://x.test/a', {}, { timeoutMs: 20 }),
       ).rejects.toThrow(/aborted/);

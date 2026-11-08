@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import SemanticReleaseError from '@semantic-release/error';
+import { RetryAgent, getGlobalDispatcher } from 'undici';
 import { fromBase64 } from './utils/base64.js';
 import { messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
@@ -16,20 +17,47 @@ export interface HttpResult {
   readonly body: unknown;
 }
 
-const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+/**
+ * Failures worth another attempt: the connection errors undici retries by
+ * default, plus DNS hiccups and the timeouts of the underlying socket.
+ */
+const RETRYABLE_ERROR_CODES = [
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'EHOSTDOWN',
+  'EHOSTUNREACH',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+];
+
+export interface HttpRequest {
+  readonly method?: 'GET' | 'POST';
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: string | Uint8Array;
+}
 
 /**
- * TODO: replace the hand-written retry below with undici's `RetryAgent`
- * (see the TypeScript article, "HTTP retries use undici"); it also honours
- * `Retry-After`, which this loop does not.
- *
  * Perform a request and decode a JSON (or fall back to text) response. The
- * request is aborted after `timeoutMs`. Read requests are retried a few times
- * on throttling, server errors and network failures; requests that change
- * state are never retried, so an upload or a publish cannot run twice.
+ * whole call, retries included, is aborted after `timeoutMs`. When `retries`
+ * is above zero the call goes through undici's `RetryAgent`, which retries
+ * throttling (429), server errors and connection failures with exponential
+ * backoff and honours `Retry-After`, then hands back the last response if the
+ * attempts run out. Requests that change state are never given retries, so an
+ * upload or a publish cannot run twice.
+ *
+ * The dispatcher's `request` is used rather than `fetch` because `fetch`
+ * turns a body into a one-shot stream, which undici cannot send a second time
+ * (the retry fails with a content-length mismatch); a string or byte body
+ * can be replayed, which the token exchange needs.
  *
  * @param url Absolute URL to call.
- * @param init Request options passed to `fetch`.
+ * @param init Method, headers and body.
  * @param options Timeout in milliseconds, and the number of retries for
  * idempotent requests.
  * @returns The status and decoded body.
@@ -38,39 +66,48 @@ const RETRYABLE = new Set([429, 500, 502, 503, 504]);
  */
 export async function request(
   url: string,
-  init: NonNullable<Parameters<typeof fetch>[1]>,
+  init: HttpRequest,
   options: { timeoutMs?: number; retries?: number } = {},
 ): Promise<HttpResult> {
   const { timeoutMs = 60000, retries = 0 } = options;
-  const attempt = async (left: number): Promise<HttpResult> => {
-    try {
-      const response = await fetch(url, {
-        ...init,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const text = await response.text();
-      const body = ((): unknown => {
-        try {
-          return text === '' ? undefined : JSON.parse(text);
-        } catch {
-          return text.slice(0, 500);
-        }
-      })();
-      if (RETRYABLE.has(response.status) && left > 0) {
-        await sleep(500 * 2 ** (retries - left));
-        return attempt(left - 1);
+  const target = new URL(url);
+  const method = init.method ?? 'GET';
+  const dispatcher =
+    retries > 0
+      ? new RetryAgent(getGlobalDispatcher(), {
+          maxRetries: retries,
+          throwOnError: false,
+          methods: [method],
+          errorCodes: RETRYABLE_ERROR_CODES,
+        })
+      : getGlobalDispatcher();
+  try {
+    const response = await dispatcher.request({
+      origin: target.origin,
+      path: `${target.pathname}${target.search}`,
+      method,
+      headers: init.headers,
+      body: init.body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await response.body.text();
+    const body = ((): unknown => {
+      try {
+        return text === '' ? undefined : JSON.parse(text);
+      } catch {
+        return text.slice(0, 500);
       }
-      return { status: response.status, ok: response.ok, body };
-    } catch (error) {
-      if (left > 0) {
-        await sleep(500 * 2 ** (retries - left));
-        return attempt(left - 1);
-      }
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Network error calling ${new URL(url).host}: ${reason}`);
-    }
-  };
-  return attempt(retries);
+    })();
+    return {
+      status: response.statusCode,
+      ok: response.statusCode >= 200 && response.statusCode < 300,
+      body,
+    };
+  } catch (error) {
+    throw new Error(
+      `Network error calling ${target.host}: ${messageOf(error)}`,
+    );
+  }
 }
 
 const CHROME_WEBSTORE_SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
@@ -333,7 +370,7 @@ export async function getAccessToken(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(form),
+      body: new URLSearchParams(form).toString(),
     },
     { retries: 2 },
   ).catch((error: unknown) => {
@@ -672,7 +709,7 @@ export class WebStoreClient {
   private async call<T>(
     action: Action,
     url: string,
-    init: NonNullable<Parameters<typeof fetch>[1]>,
+    init: HttpRequest,
     parse: (body: unknown) => T,
     options: { retries?: number; timeoutMs?: number } = {},
   ): Promise<T> {
@@ -723,7 +760,7 @@ export class WebStoreClient {
           'Content-Type': 'application/zip',
           'Content-Length': String(zip.length),
         }),
-        body: new Uint8Array(zip),
+        body: zip,
       },
       parseUpload,
       { timeoutMs: 600000 },
