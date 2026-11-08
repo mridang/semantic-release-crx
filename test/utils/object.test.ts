@@ -19,6 +19,13 @@ describe('isRecord', () => {
 });
 
 describe('stringAt, booleanAt and numberAt', () => {
+  it('ignore a member that is inherited from the prototype', () => {
+    const inherited = Object.create({ s: 'x', b: true, n: 1 });
+    expect(stringAt(inherited, 's')).toBeUndefined();
+    expect(booleanAt(inherited, 'b')).toBeUndefined();
+    expect(numberAt(inherited, 'n')).toBeUndefined();
+  });
+
   const record = { s: 'x', b: false, n: 0, other: null };
 
   it('read a property of the right type', () => {

@@ -20,6 +20,7 @@ import {
   type CrxPluginConfig,
 } from './plugin-config.js';
 import { codeOf, messageOf } from './utils/error.js';
+import { isRecord } from './utils/object.js';
 import { toManifestVersion } from './version.js';
 import { resolveCredentials, WebStoreClient } from './webstore.js';
 
@@ -31,16 +32,20 @@ export type {
 
 /**
  * The errors inside whatever was thrown: the members of an aggregate error,
- * or the error itself.
+ * or the error itself. Recognised by shape, like `messageOf`, because an error
+ * can come from another realm.
  *
  * @param error A caught value.
  * @returns One or more errors.
  */
 function errorsFrom(error: unknown): readonly Error[] {
-  if (error instanceof AggregateError) {
-    return error.errors.filter((member: unknown) => member instanceof Error);
-  }
-  return [error instanceof Error ? error : new Error(messageOf(error))];
+  const members =
+    isRecord(error) && Array.isArray(error.errors) ? error.errors : [error];
+  return members.map((member: unknown) =>
+    member instanceof Error
+      ? member
+      : new SemanticReleaseError(messageOf(member), codeOf(member)),
+  );
 }
 
 /**

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mockFetch } from './utils/fetch-mock.js';
+import { mockHttp } from './utils/http-mock.js';
 import {
   BASE,
   CONFIG,
@@ -56,7 +56,7 @@ describe('plugin entry point', () => {
         'dist/a.js': '1',
       },
       async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: { json: {} },
           [UPLOAD]: { json: { uploadState: 'SUCCEEDED' } },
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
@@ -84,7 +84,7 @@ describe('plugin entry point', () => {
   });
 
   it('is loaded by the real semantic-release plugin loader, addChannel included', async () => {
-    const calls = mockFetch({
+    const calls = mockHttp({
       [`POST https://chromewebstore.googleapis.com/v2/${ITEM}:setPublishedDeployPercentage`]:
         { json: {} },
     });
@@ -161,7 +161,7 @@ describe('verifyConditions', () => {
 
   describe('verifyConditions', () => {
     it('proves the credentials work by fetching the item status', async () => {
-      const calls = mockFetch({
+      const calls = mockHttp({
         [STATUS]: {
           json: { publishedItemRevisionStatus: { state: 'PUBLISHED' } },
         },
@@ -169,12 +169,12 @@ describe('verifyConditions', () => {
       const { result, lines } = run({});
       await result;
       expect(calls).toHaveLength(1);
-      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+      expect(calls[0].headers.authorization).toBe('Bearer SECRET-TOKEN');
       expect(lines).toContain('Chrome Web Store credentials are valid.');
     });
 
     it('does nothing for target local, even without credentials', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       const { result, lines } = run(
         { target: 'local', extensionId: undefined },
         { env: {} },
@@ -185,7 +185,7 @@ describe('verifyConditions', () => {
     });
 
     it('does nothing on a pre-release branch when prerelease is skip', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       const { result } = run(
         { prerelease: 'skip' },
         { env: {}, branch: { name: 'beta', prerelease: 'beta' } },
@@ -195,7 +195,7 @@ describe('verifyConditions', () => {
     });
 
     it('rejects a pre-release branch when prerelease is reject', async () => {
-      mockFetch({ [STATUS]: { json: {} } });
+      mockHttp({ [STATUS]: { json: {} } });
       const { result } = run(
         { prerelease: 'reject' },
         { branch: { name: 'beta', prerelease: 'beta' } },
@@ -204,7 +204,7 @@ describe('verifyConditions', () => {
     });
 
     it('reports every configuration problem at once', async () => {
-      mockFetch({});
+      mockHttp({});
       const { result } = run(
         { extensionId: undefined, publisherId: undefined, target: 'nope' },
         { env: {} },
@@ -218,7 +218,7 @@ describe('verifyConditions', () => {
     });
 
     it('reports the individual missing OAuth variables like the original plugin', async () => {
-      mockFetch({});
+      mockHttp({});
       const { result } = run({}, { env: { GOOGLE_CLIENT_ID: 'id' } });
       expect(await codes(result)).toEqual([
         'EGOOGLECLIENTSECRET',
@@ -227,7 +227,7 @@ describe('verifyConditions', () => {
     });
 
     it('uses the extension id for the current branch', async () => {
-      const calls = mockFetch({
+      const calls = mockHttp({
         'GET https://chromewebstore.googleapis.com/v2/publishers/pub-1/items/staging-id:fetchStatus':
           { json: {} },
       });
@@ -240,7 +240,7 @@ describe('verifyConditions', () => {
     });
 
     it('exchanges a refresh token before checking the item', async () => {
-      const calls = mockFetch({
+      const calls = mockHttp({
         [TOKEN]: { json: { access_token: 'minted' } },
         [STATUS]: { json: {} },
       });
@@ -255,11 +255,11 @@ describe('verifyConditions', () => {
         },
       );
       await result;
-      expect(calls[1].headers.Authorization).toBe('Bearer minted');
+      expect(calls[1].headers.authorization).toBe('Bearer minted');
     });
 
     it('fails clearly when the store rejects the credentials, without leaking them', async () => {
-      mockFetch({
+      mockHttp({
         [STATUS]: {
           status: 401,
           json: { error: { message: 'Invalid Credentials' } },
@@ -274,7 +274,7 @@ describe('verifyConditions', () => {
     });
 
     it('warns about a taken down or warned item', async () => {
-      mockFetch({
+      mockHttp({
         [STATUS]: [{ json: { takenDown: true } }, { json: { warned: true } }],
       });
       const first = run({});
@@ -492,7 +492,7 @@ describe('publish', () => {
   afterEach(() => jest.restoreAllMocks());
 
   const mock = (routes: Record<string, unknown>) =>
-    mockFetch({ [STATUS]: { json: {} }, ...routes } as never);
+    mockHttp({ [STATUS]: { json: {} }, ...routes } as never);
 
   const OK_UPLOAD = { json: { uploadState: 'SUCCEEDED', crxVersion: '1.1.0' } };
 
@@ -552,7 +552,6 @@ describe('publish', () => {
           });
           await expect(run(dir).result).rejects.toBeDefined();
           expect(calls.some((c) => c.url.endsWith(':publish'))).toBe(false);
-          jest.restoreAllMocks();
         }
       });
     });
@@ -758,7 +757,6 @@ describe('publish', () => {
           await expect(run(dir).result).rejects.toMatchObject({
             code: 'EPUBLISHSTATE',
           });
-          jest.restoreAllMocks();
         }
       });
     });
@@ -773,7 +771,6 @@ describe('publish', () => {
         ]) {
           mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
           expect((await run(dir).result)?.url).toContain('ext-1');
-          jest.restoreAllMocks();
         }
       });
     });
@@ -940,7 +937,7 @@ describe('publish', () => {
 
     it('cancels exactly once, before the upload, when a submission is pending', async () => {
       await withAsset(async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: PENDING,
           [CANCEL]: { json: {} },
           [UPLOAD]: OK_UPLOAD,
@@ -960,7 +957,7 @@ describe('publish', () => {
 
     it('keeps the individual warning errors when a pending submission is left in place', async () => {
       await withAsset(async (dir) => {
-        mockFetch({
+        mockHttp({
           [STATUS]: PENDING,
           [UPLOAD]: OK_UPLOAD,
           [PUBLISH]: {
@@ -984,7 +981,7 @@ describe('publish', () => {
 
     it('does not cancel when nothing is pending', async () => {
       await withAsset(async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: {
             json: { submittedItemRevisionStatus: { state: 'PUBLISHED' } },
           },
@@ -998,7 +995,7 @@ describe('publish', () => {
 
     it('only warns when the option is off', async () => {
       await withAsset(async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: PENDING,
           [UPLOAD]: OK_UPLOAD,
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
@@ -1014,7 +1011,7 @@ describe('publish', () => {
 
     it('adds a hint to a refusal when a pending submission was left in place', async () => {
       await withAsset(async (dir) => {
-        mockFetch({
+        mockHttp({
           [STATUS]: PENDING,
           [UPLOAD]: {
             status: 400,
@@ -1032,7 +1029,7 @@ describe('publish', () => {
 
     it('adds the same hint when the publish call is refused', async () => {
       await withAsset(async (dir) => {
-        mockFetch({
+        mockHttp({
           [STATUS]: PENDING,
           [UPLOAD]: OK_UPLOAD,
           [PUBLISH]: { status: 400, json: { error: { message: 'busy' } } },
@@ -1045,7 +1042,7 @@ describe('publish', () => {
 
     it('uploads nothing and publishes nothing when the cancel fails', async () => {
       await withAsset(async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: PENDING,
           [CANCEL]: {
             status: 400,
@@ -1066,7 +1063,7 @@ describe('publish', () => {
 
     it('stops when the status check fails and cancelling was requested', async () => {
       await withAsset(async (dir) => {
-        const calls = mockFetch({
+        const calls = mockHttp({
           [STATUS]: { status: 403, json: { error: { message: 'no' } } },
         });
         await expect(
@@ -1080,7 +1077,7 @@ describe('publish', () => {
 
     it('carries on with a warning when the status check fails and cancelling was not requested', async () => {
       await withAsset(async (dir) => {
-        mockFetch({
+        mockHttp({
           [STATUS]: { status: 403, json: { error: { message: 'no' } } },
           [UPLOAD]: OK_UPLOAD,
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
@@ -1094,7 +1091,7 @@ describe('publish', () => {
     });
 
     it('never looks for a pending submission for target local', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       await run('/nowhere', { target: 'local', cancelPendingSubmission: true })
         .result;
       expect(calls).toHaveLength(0);
@@ -1103,7 +1100,7 @@ describe('publish', () => {
 
   describe('publish asset template', () => {
     it('reports EINVALIDASSET when the template cannot be evaluated', async () => {
-      mockFetch({});
+      mockHttp({});
       await expect(
         run('/nowhere', { asset: '${nope.version}.zip' }).result,
       ).rejects.toMatchObject({
@@ -1134,13 +1131,13 @@ describe('addChannel', () => {
 
   describe('addChannel', () => {
     it('does nothing unless promoteDeployPercentage is set', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       expect(await run({}).result).toBeUndefined();
       expect(calls).toHaveLength(0);
     });
 
     it('does nothing for target local', async () => {
-      const calls = mockFetch({});
+      const calls = mockHttp({});
       expect(
         await run({ promoteDeployPercentage: 50, target: 'local' }).result,
       ).toBeUndefined();
@@ -1148,7 +1145,7 @@ describe('addChannel', () => {
     });
 
     it('raises the published rollout and returns the release link', async () => {
-      const calls = mockFetch({ [PROMOTE]: { json: {} } });
+      const calls = mockHttp({ [PROMOTE]: { json: {} } });
       const { result, lines } = run({ promoteDeployPercentage: 50 });
       expect(await result).toEqual({
         name: 'Chrome Web Store',
@@ -1156,18 +1153,18 @@ describe('addChannel', () => {
       });
       expect(calls).toHaveLength(1);
       expect(calls[0].body).toEqual({ deployPercentage: 50 });
-      expect(calls[0].headers.Authorization).toBe('Bearer SECRET-TOKEN');
+      expect(calls[0].headers.authorization).toBe('Bearer SECRET-TOKEN');
       expect(lines.join('\n')).not.toContain('SECRET-TOKEN');
     });
 
     it('accepts 0 and 100', async () => {
-      mockFetch({ [PROMOTE]: { json: {} } });
+      mockHttp({ [PROMOTE]: { json: {} } });
       await run({ promoteDeployPercentage: 0 }).result;
       await run({ promoteDeployPercentage: 100 }).result;
     });
 
     it('rejects an invalid percentage with the deployPercentage code', async () => {
-      mockFetch({});
+      mockHttp({});
       for (const value of [101, -1, 2.5]) {
         const error = (await run({
           promoteDeployPercentage: value,
@@ -1179,7 +1176,7 @@ describe('addChannel', () => {
     });
 
     it('reports missing options and credentials', async () => {
-      mockFetch({});
+      mockHttp({});
       const missing = (await run(
         {
           promoteDeployPercentage: 5,
@@ -1197,7 +1194,7 @@ describe('addChannel', () => {
     });
 
     it('surfaces the store refusal with the preconditions', async () => {
-      mockFetch({
+      mockHttp({
         [PROMOTE]: {
           status: 400,
           json: { error: { message: 'percentage must be larger' } },
@@ -1214,7 +1211,7 @@ describe('addChannel', () => {
     });
 
     it('maps a permission failure', async () => {
-      mockFetch({
+      mockHttp({
         [PROMOTE]: { status: 403, json: { error: { message: 'denied' } } },
       });
       await expect(
@@ -1226,7 +1223,7 @@ describe('addChannel', () => {
       const saved = { ...process.env };
       process.env.CHROME_ACCESS_TOKEN = 'ENV-TOKEN';
       try {
-        const calls = mockFetch({ [PROMOTE]: { json: {} } });
+        const calls = mockHttp({ [PROMOTE]: { json: {} } });
         await run(
           {
             promoteDeployPercentage: 5,
@@ -1235,7 +1232,7 @@ describe('addChannel', () => {
           },
           { env: undefined },
         ).result;
-        expect(calls[0].headers.Authorization).toBe('Bearer ENV-TOKEN');
+        expect(calls[0].headers.authorization).toBe('Bearer ENV-TOKEN');
       } finally {
         process.env = saved;
       }
