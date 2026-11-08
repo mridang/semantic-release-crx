@@ -10,6 +10,7 @@ import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
 import { startTunnelProxy } from './utils/proxy.js';
 import { listen, startFaultyProxy } from './utils/server.js';
 import { inspect } from 'node:util';
+import { MockAgent } from 'undici';
 import {
   createPublicKey,
   createVerify,
@@ -1132,6 +1133,124 @@ describe('request over a real socket', () => {
     },
     15000,
   );
+
+  describe('redirects', () => {
+    it('are not followed unless asked for, and the target is shown without its query', async () => {
+      const { url, seen } = await serve((_req, res) => {
+        res.writeHead(302, { Location: '/elsewhere?token=SECRET' });
+        res.end();
+      });
+
+      const result = await request(`${url}/a`, {});
+
+      expect(result).toMatchObject({
+        status: 302,
+        ok: false,
+        location: `${url}/elsewhere`,
+      });
+      expect(JSON.stringify(result)).not.toContain('SECRET');
+      expect(seen).toEqual(['GET /a']);
+    });
+
+    it('are followed on the same origin when asked for, credentials included', async () => {
+      const headers: unknown[] = [];
+      const { url, seen } = await serve((req, res) => {
+        headers.push(req.headers['authorization']);
+        if (seen.length === 1) {
+          res.writeHead(301, { Location: '/b?x=1' }).end();
+          return;
+        }
+        res.end('{"ok":1}');
+      });
+
+      const result = await request(
+        `${url}/a`,
+        { headers: { Authorization: 'Bearer T' } },
+        { followRedirects: true },
+      );
+
+      expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
+      expect(seen).toEqual(['GET /a', 'GET /b?x=1']);
+      expect(headers).toEqual(['Bearer T', 'Bearer T']);
+    });
+
+    it('are not followed to another origin, so the credentials stay put', async () => {
+      const other = await serve((_req, res) => res.end('{"leak":1}'));
+      const { url } = await serve((_req, res) => {
+        res.writeHead(302, { Location: `${other.url}/x?token=SECRET` }).end();
+      });
+
+      const result = await request(
+        `${url}/a`,
+        { headers: { Authorization: 'Bearer T' } },
+        { followRedirects: true },
+      );
+
+      expect(result).toMatchObject({
+        status: 302,
+        location: `${other.url}/x`,
+      });
+      expect(other.seen).toHaveLength(0);
+    });
+
+    it('are not followed from https to http', async () => {
+      const agent = new MockAgent();
+      agent.disableNetConnect();
+      agent
+        .get('https://x.test')
+        .intercept({ path: '/a', method: 'GET' })
+        .reply(301, '', { headers: { location: 'http://x.test/b?access=1' } });
+
+      const result = await request(
+        'https://x.test/a',
+        {},
+        { agent, followRedirects: true },
+      );
+
+      expect(result).toMatchObject({
+        status: 301,
+        location: 'http://x.test/b',
+      });
+    });
+
+    it('stop after three hops and report the last redirect', async () => {
+      const { url, seen } = await serve((_req, res) => {
+        res.writeHead(301, { Location: '/again' }).end();
+      });
+
+      const result = await request(`${url}/a`, {}, { followRedirects: true });
+
+      expect(result).toMatchObject({ status: 301, location: `${url}/again` });
+      expect(seen).toHaveLength(4);
+    });
+
+    it('are not followed for a POST', async () => {
+      const { url, seen } = await serve((_req, res) => {
+        res.writeHead(307, { Location: '/b' }).end();
+      });
+
+      const result = await request(
+        `${url}/a`,
+        { method: 'POST', body: 'a=1' },
+        { followRedirects: true },
+      );
+
+      expect(result.status).toBe(307);
+      expect(seen).toEqual(['POST /a']);
+    });
+
+    it('are not followed without a usable location', async () => {
+      const { url, seen } = await serve((_req, res) => {
+        res.writeHead(302).end();
+      });
+
+      const result = await request(`${url}/a`, {}, { followRedirects: true });
+
+      expect(result).toMatchObject({ status: 302 });
+      expect(result.location).toBeUndefined();
+      expect(seen).toHaveLength(1);
+    });
+  });
 });
 
 describe('client', () => {

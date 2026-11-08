@@ -72,6 +72,11 @@ const IDEMPOTENT_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'];
 const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
 
 /**
+ * How many redirects are followed when the call asks for it.
+ */
+const MAX_REDIRECTIONS = 3;
+
+/**
  * The most of a response body that is read. undici stops a larger body, which
  * is then reported as a failure and not repeated.
  */
@@ -244,6 +249,36 @@ function placeOf(location: unknown, base: URL): string | undefined {
 }
 
 /**
+ * Where a redirect may be followed to. Only a GET or HEAD request is
+ * followed, and only to the same origin, which rules out a change from https
+ * to http and keeps the credentials from leaving for another host.
+ *
+ * @param from The URL that was called.
+ * @param method The method of the request.
+ * @param status The status of the response.
+ * @param location The `Location` header.
+ * @returns The URL to call next, or undefined when the redirect is not to be
+ * followed.
+ */
+function sameOriginRedirect(
+  from: URL,
+  method: string,
+  status: number,
+  location: unknown,
+): URL | undefined {
+  if (
+    !['GET', 'HEAD'].includes(method) ||
+    ![301, 302, 303, 307, 308].includes(status) ||
+    typeof location !== 'string' ||
+    !URL.canParse(location, from.href)
+  ) {
+    return undefined;
+  }
+  const next = new URL(location, from.href);
+  return next.origin === from.origin ? next : undefined;
+}
+
+/**
  * Whether a failed attempt is worth another one.
  *
  * @param error The error undici reports for the failed attempt.
@@ -341,6 +376,12 @@ export interface RequestOptions {
    * it a POST gets no retries whatever `retries` says.
    */
   readonly retryPost?: boolean;
+  /**
+   * Follow the redirects of a GET or HEAD request, up to three, but only to
+   * the same origin. Off by default. A redirect that is not followed is
+   * returned with its `location`.
+   */
+  readonly followRedirects?: boolean;
 }
 
 /**
@@ -352,8 +393,8 @@ export interface RequestOptions {
  * back-off, honouring `Retry-After`; once the attempts run out the last
  * response is returned. If the connection drops while the body is being read,
  * the whole request is sent again, and each such replay gets the retries that
- * are left. Redirects are never followed and `Content-Encoding` is not
- * decoded: the endpoints used here do neither.
+ * are left. Redirects are only followed when `followRedirects` is set, and
+ * `Content-Encoding` is not decoded: the endpoints used here do not use it.
  *
  * The call is bounded by `deadlineMs`. When it passes, a wait for the next
  * attempt is cancelled and the connections this call created are destroyed,
@@ -379,6 +420,7 @@ export async function request(
     deadlineMs = DEADLINE_MS,
     minTimeout = 500,
     retryPost = false,
+    followRedirects = false,
   } = options;
   const target = new URL(url);
   const method = init.method ?? 'GET';
@@ -400,7 +442,11 @@ export async function request(
       ...Object.entries(init.headers ?? {}),
     ].map(([name, value]) => [name.toLowerCase(), value]),
   );
-  const exchange = async (left: number): Promise<HttpResult> => {
+  const exchange = async (
+    left: number,
+    where: URL,
+    hops: number,
+  ): Promise<HttpResult> => {
     const dispatcher =
       left > 0 && base !== undefined
         ? new RetryAgent(base.compose(markBodyFailures), {
@@ -427,7 +473,7 @@ export async function request(
             },
           })
         : base;
-    const response = await send(target, {
+    const response = await send(where, {
       dispatcher,
       method,
       headers,
@@ -441,9 +487,20 @@ export async function request(
       throw error;
     });
     if (text === undefined) {
-      return exchange(left - 1);
+      return exchange(left - 1, where, hops);
     }
-    const location = placeOf(response.headers.location, target);
+    const next = followRedirects
+      ? sameOriginRedirect(
+          where,
+          method,
+          response.statusCode,
+          response.headers.location,
+        )
+      : undefined;
+    if (next !== undefined && hops > 0) {
+      return exchange(left, next, hops - 1);
+    }
+    const location = placeOf(response.headers.location, where);
     return {
       status: response.statusCode,
       ok: response.statusCode >= 200 && response.statusCode < 300,
@@ -463,7 +520,7 @@ export async function request(
       { once: true, signal: finished.signal },
     ),
   );
-  const attempt = exchange(retries);
+  const attempt = exchange(retries, target, MAX_REDIRECTIONS);
   attempt.catch(() => undefined);
   try {
     return await Promise.race([attempt, expired]);
