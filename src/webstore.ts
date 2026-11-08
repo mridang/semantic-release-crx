@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import SemanticReleaseError from '@semantic-release/error';
-import { RetryAgent, getGlobalDispatcher } from 'undici';
+import { Agent, RetryAgent, request as send, type Dispatcher } from 'undici';
 import { fromBase64 } from './utils/base64.js';
 import { messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
@@ -39,6 +39,25 @@ const RETRYABLE_ERROR_CODES = [
   'UND_ERR_BODY_TIMEOUT',
 ];
 
+/**
+ * The dispatcher every call goes through. It is undici's own `Agent` rather
+ * than `getGlobalDispatcher()`: that slot is shared with the runtime's bundled
+ * undici, which may be a different version whose dispatcher a `RetryAgent`
+ * cannot wrap ("invalid onError method"). One agent is reused so connections
+ * are pooled. Only tests replace it, through `useDispatcher`.
+ */
+const transport: { base: Dispatcher } = { base: new Agent() };
+
+/**
+ * Replace the dispatcher that requests are sent through, so tests can use
+ * undici's `MockAgent` and never reach the network.
+ *
+ * @param dispatcher The dispatcher to send requests through from now on.
+ */
+export function useDispatcher(dispatcher: Dispatcher): void {
+  transport.base = dispatcher;
+}
+
 export interface HttpRequest {
   readonly method?: 'GET' | 'POST';
   readonly headers?: Readonly<Record<string, string>>;
@@ -54,7 +73,7 @@ export interface HttpRequest {
  * hands back the last response if the attempts run out. Requests that change state are never given retries, so an
  * upload or a publish cannot run twice.
  *
- * The dispatcher's `request` is used rather than `fetch` because `fetch`
+ * undici's `request` is used rather than `fetch` because `fetch`
  * turns a body into a one-shot stream, which undici cannot send a second time
  * (the retry fails with a content-length mismatch); a string or byte body
  * can be replayed, which the token exchange needs.
@@ -77,17 +96,16 @@ export async function request(
   const method = init.method ?? 'GET';
   const dispatcher =
     retries > 0
-      ? new RetryAgent(getGlobalDispatcher(), {
+      ? new RetryAgent(transport.base, {
           maxRetries: retries,
           throwOnError: false,
           methods: [method],
           errorCodes: RETRYABLE_ERROR_CODES,
         })
-      : getGlobalDispatcher();
+      : transport.base;
   try {
-    const response = await dispatcher.request({
-      origin: target.origin,
-      path: `${target.pathname}${target.search}`,
+    const response = await send(target, {
+      dispatcher,
       method,
       headers: init.headers,
       body: init.body,

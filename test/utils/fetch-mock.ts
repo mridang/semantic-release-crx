@@ -1,4 +1,5 @@
-import { MockAgent, setGlobalDispatcher } from 'undici';
+import { MockAgent } from 'undici';
+import { useDispatcher } from '../../src/webstore.js';
 import { isRecord } from '../../src/utils/object.js';
 
 interface Reply {
@@ -30,7 +31,7 @@ function install(): MockAgent {
   void agent?.close();
   agent = new MockAgent({ enableCallHistory: true });
   agent.disableNetConnect();
-  setGlobalDispatcher(agent);
+  useDispatcher(agent);
   return agent;
 }
 
