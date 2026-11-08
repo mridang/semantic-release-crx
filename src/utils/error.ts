@@ -27,7 +27,8 @@ export function messageOf(error: unknown): string {
 }
 
 /**
- * The `code` of anything that was thrown, such as a `SemanticReleaseError`.
+ * The `code` of anything that was thrown, such as a `SemanticReleaseError`
+ * or a Node system error (`ENOENT`).
  *
  * @param error A caught value.
  * @returns Its string `code`, or undefined when it has none.
