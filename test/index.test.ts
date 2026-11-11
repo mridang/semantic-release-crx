@@ -151,7 +151,7 @@ describe('verifyConditions', () => {
   };
 
   const codes = async (promise: Promise<unknown>): Promise<string[]> => {
-    const error = await promise.catch((e: unknown) => e);
+    const error = await promise.catch((error_: unknown) => error_);
     const list =
       error instanceof AggregateError
         ? (error.errors as Error[])
@@ -266,7 +266,9 @@ describe('verifyConditions', () => {
         },
       });
       const { result } = run({});
-      const error = (await result.catch((e: unknown) => e)) as Error & {
+      const error = (await result.catch(
+        (error_: unknown) => error_,
+      )) as Error & {
         code: string;
       };
       expect(error.code).toBe('EWEBSTOREAUTH');
@@ -843,7 +845,9 @@ describe('publish', () => {
         { extensionId: undefined, publisherId: undefined, asset: undefined },
         { env: {} },
       );
-      const error = (await result.catch((e: unknown) => e)) as AggregateError;
+      const error = (await result.catch(
+        (error_: unknown) => error_,
+      )) as AggregateError;
       expect(
         error.errors.map((e: Error & { code?: string }) => e.code),
       ).toEqual(['ENOASSET', 'ENOEXTENSIONID', 'ENOPUBLISHERID']);
@@ -874,7 +878,9 @@ describe('publish', () => {
           [PUBLISH]: { status: 403, json: { error: { message: 'denied' } } },
         });
         const { result, lines } = run(dir);
-        const error = (await result.catch((e: unknown) => e)) as Error;
+        const error = (await result.catch(
+          (error_: unknown) => error_,
+        )) as Error;
         expect(error.message).not.toContain('SECRET-TOKEN');
         expect(lines.join('\n')).not.toContain('SECRET-TOKEN');
       });
@@ -970,7 +976,7 @@ describe('publish', () => {
           },
         });
         const error = (await run(dir, { failOnWarnings: true }).result.catch(
-          (e: unknown) => e,
+          (error_: unknown) => error_,
         )) as AggregateError;
         expect(error).toBeInstanceOf(AggregateError);
         expect(error.errors).toEqual([
@@ -1168,7 +1174,7 @@ describe('addChannel', () => {
       for (const value of [101, -1, 2.5]) {
         const error = (await run({
           promoteDeployPercentage: value,
-        }).result.catch((e: unknown) => e)) as AggregateError;
+        }).result.catch((error_: unknown) => error_)) as AggregateError;
         expect(error.errors[0]).toMatchObject({
           code: 'EINVALIDDEPLOYPERCENTAGE',
         });
@@ -1184,7 +1190,7 @@ describe('addChannel', () => {
           publisherId: undefined,
         },
         { env: {} },
-      ).result.catch((e: unknown) => e)) as AggregateError;
+      ).result.catch((error: unknown) => error)) as AggregateError;
       expect(
         missing.errors.map((e: Error & { code?: string }) => e.code),
       ).toEqual(['ENOEXTENSIONID', 'ENOPUBLISHERID']);

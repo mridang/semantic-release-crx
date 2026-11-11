@@ -3,9 +3,8 @@ import { toBase64Url } from './base64.js';
 
 /**
  * Sign claims as a compact RS256 JSON Web Token.
- *
- * @param claims Claims to put in the payload.
- * @param privateKey PEM encoded RSA private key.
+ * @param claims - Claims to put in the payload.
+ * @param privateKey - PEM encoded RSA private key.
  * @returns The `header.payload.signature` token.
  */
 export function signJwt(

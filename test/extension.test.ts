@@ -91,10 +91,10 @@ describe('Extension.setVersion', () => {
 
   it('copes with a 1 MB manifest', async () => {
     const big = JSON.stringify({
-      list: Array.from({ length: 150000 }, (_, i) => i),
+      list: Array.from({ length: 150_000 }, (_, i) => i),
       version: '1.0.0',
     });
-    expect(big.length).toBeGreaterThan(900000);
+    expect(big.length).toBeGreaterThan(900_000);
     expect(JSON.parse(await versioned(big, '2.0.0')).version).toBe('2.0.0');
   });
 

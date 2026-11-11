@@ -34,8 +34,7 @@ export type {
  * The errors inside whatever was thrown: the members of an aggregate error,
  * or the error itself. Recognised by shape, like `messageOf`, because an error
  * can come from another realm.
- *
- * @param error A caught value.
+ * @param error - A caught value.
  * @returns One or more errors.
  */
 function errorsFrom(error: unknown): readonly Error[] {
@@ -49,15 +48,14 @@ function errorsFrom(error: unknown): readonly Error[] {
 }
 
 /**
- * semantic-release `verifyConditions` step. Checks the configuration, finds
+ * Semantic-release `verifyConditions` step. Checks the configuration, finds
  * credentials, and proves they work by asking the store for the item's status,
  * so a bad token fails the release before anything is versioned or tagged.
  * Nothing is skipped silently: with `target: 'local'` the store is not
  * contacted at all, and with `prerelease: 'skip'` on a pre-release branch the
- * store is not needed either.
- *
- * @param config Plugin configuration from the semantic-release config.
- * @param context semantic-release context.
+ * store is not needed either..
+ * @param config - Plugin configuration from the semantic-release config.
+ * @param context - Semantic-release context.
  * @throws An aggregate error listing every problem that was found.
  */
 export async function verifyConditions(
@@ -125,14 +123,13 @@ export async function verifyConditions(
 }
 
 /**
- * semantic-release `prepare` step. Writes the next version into the manifest
+ * Semantic-release `prepare` step. Writes the next version into the manifest
  * (and any `additionalManifests`), then zips the dist folder to `asset` so
  * that `@semantic-release/github` can attach it to the release. Comments in
  * the manifest are preserved, and pre-releases are converted to a four part
- * Chrome version with the full semver in `version_name`.
- *
- * @param config Plugin configuration from the semantic-release config.
- * @param context semantic-release context.
+ * Chrome version with the full semver in `version_name`..
+ * @param config - Plugin configuration from the semantic-release config.
+ * @param context - Semantic-release context.
  * @throws If configuration or the build output is wrong.
  */
 export async function prepare(
@@ -203,10 +200,9 @@ type Logger = PublishContext['logger'];
  * because the store may refuse a new upload or submission. Without the option
  * a failed status check is only logged, so the default flow never depends on
  * it.
- *
- * @param config Plugin configuration.
- * @param client Store client.
- * @param logger Step logger.
+ * @param config - Plugin configuration.
+ * @param client - Store client.
+ * @param logger - Step logger.
  * @returns True when a pending submission was found and left in place.
  */
 async function handlePendingSubmission(
@@ -242,10 +238,9 @@ async function handlePendingSubmission(
 /**
  * Point at `cancelPendingSubmission` when a refusal may be caused by a
  * pending submission that was left in place.
- *
- * @param error The error raised by the store call.
- * @param pending Whether a pending submission was found and kept.
- * @param config Plugin configuration.
+ * @param error - The error raised by the store call.
+ * @param pending - Whether a pending submission was found and kept.
+ * @param config - Plugin configuration.
  * @returns The error to throw: the original, or a copy whose message carries
  * the hint.
  */
@@ -266,12 +261,11 @@ function withPendingHint(
 }
 
 /**
- * semantic-release `publish` step. Uploads the zip built by `prepare`, waits
+ * Semantic-release `publish` step. Uploads the zip built by `prepare`, waits
  * for the store to finish processing it, and only then submits it. The
- * submission is never made unless the upload reported `SUCCEEDED`.
- *
- * @param config Plugin configuration from the semantic-release config.
- * @param context semantic-release context.
+ * submission is never made unless the upload reported `SUCCEEDED`..
+ * @param config - Plugin configuration from the semantic-release config.
+ * @param context - Semantic-release context.
  * @returns The release link semantic-release shows in its comments, or
  * undefined when nothing was published.
  * @throws If configuration, credentials, the upload or the submission fail.
@@ -390,15 +384,14 @@ export async function publish(
 }
 
 /**
- * semantic-release `addChannel` step, run when an existing release is
+ * Semantic-release `addChannel` step, run when an existing release is
  * promoted to another channel. When `promoteDeployPercentage` is set the
  * published revision's rollout is raised to that percentage without a new
  * review. The store refuses a value that is not larger than the current target
  * and items with 10,000 or fewer seven-day active users; the refusal is
- * reported as is. Without the option the step does nothing.
- *
- * @param config Plugin configuration from the semantic-release config.
- * @param context semantic-release context.
+ * reported as is. Without the option the step does nothing..
+ * @param config - Plugin configuration from the semantic-release config.
+ * @param context - Semantic-release context.
  * @returns The release link, or undefined when nothing was done.
  * @throws If configuration, credentials or the store call fail.
  */

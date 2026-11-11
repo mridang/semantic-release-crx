@@ -24,9 +24,8 @@ export class Extension {
 
   /**
    * Point at a built extension.
-   *
-   * @param distFolder Folder whose contents are zipped.
-   * @param manifests Manifest files that receive the release version.
+   * @param distFolder - Folder whose contents are zipped.
+   * @param manifests - Manifest files that receive the release version.
    * @returns The extension.
    */
   static at(distFolder: string, manifests: readonly string[]): Extension {
@@ -39,9 +38,8 @@ export class Extension {
    * place: only the version members change and comments, indentation, line
    * endings and key order stay as they were. `version_name` is written for
    * pre-releases and refreshed when the manifest already has one.
-   *
-   * @param semver The semantic-release version, for example `1.2.0-beta.3`.
-   * @param log Receives one line per manifest.
+   * @param semver - The semantic-release version, for example `1.2.0-beta.3`.
+   * @param log - Receives one line per manifest.
    * @throws If a manifest is missing, is not a JSON object, or the version
    * cannot be used by Chrome.
    */
@@ -100,8 +98,7 @@ export class Extension {
    * Store requires. The zip is complete on disk when this resolves and is
    * never added to itself when written inside the folder. Entries are sorted
    * and carry a fixed timestamp, so identical input gives identical output.
-   *
-   * @param output Zip file to write; its folder is created if needed.
+   * @param output - Zip file to write; its folder is created if needed.
    * @returns The number of files archived.
    * @throws If the folder is missing or empty, or contains a broken symlink or a
    * symlink to a folder (symlinks to files are followed).
@@ -131,9 +128,9 @@ export class Extension {
               (info) =>
                 info.isFile()
                   ? 'file'
-                  : info.isDirectory()
+                  : (info.isDirectory()
                     ? 'directory'
-                    : 'other',
+                    : 'other'),
               () => {
                 throw new SemanticReleaseError(
                   `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
@@ -141,9 +138,9 @@ export class Extension {
                 );
               },
             )
-          : entry.isFile()
+          : (entry.isFile()
             ? 'file'
-            : 'other';
+            : 'other');
         if (kind === 'directory') {
           throw new SemanticReleaseError(
             `The distFolder contains a symbolic link to a folder: "${path}". Its files would be left out of the zip, so replace the link with a real copy before zipping.`,

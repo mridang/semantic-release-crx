@@ -4,8 +4,7 @@ import { crc32, inflateRawSync } from 'node:zlib';
  * Read a zip file the way an independent reader would: locate the end of
  * central directory record, walk the central directory, inflate each member
  * and verify its CRC. Throws if anything is inconsistent.
- *
- * @param zip Archive bytes.
+ * @param zip - Archive bytes.
  * @returns Map of member name to contents.
  */
 export function unzip(zip: Buffer): Record<string, Buffer> {
@@ -18,7 +17,7 @@ export function unzip(zip: Buffer): Record<string, Buffer> {
   const out: Record<string, Buffer> = {};
   let at = directoryOffset;
   for (let i = 0; i < count; i += 1) {
-    if (zip.readUInt32LE(at) !== 0x02014b50) {
+    if (zip.readUInt32LE(at) !== 0x02_01_4B_50) {
       throw new Error('bad central directory header');
     }
     const method = zip.readUInt16LE(at + 10);
@@ -30,7 +29,7 @@ export function unzip(zip: Buffer): Record<string, Buffer> {
     const commentLength = zip.readUInt16LE(at + 32);
     const local = zip.readUInt32LE(at + 42);
     const name = zip.subarray(at + 46, at + 46 + nameLength).toString('utf8');
-    if (zip.readUInt32LE(local) !== 0x04034b50) {
+    if (zip.readUInt32LE(local) !== 0x04_03_4B_50) {
       throw new Error('bad local header');
     }
     const dataStart =

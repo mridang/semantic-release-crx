@@ -138,7 +138,7 @@ describe('WebStoreClient errors', () => {
     mockHttp({ [UPLOAD]: { status, json } });
     return make()
       .upload(Buffer.from('z'))
-      .catch((e: unknown) => e as Error & { code: string });
+      .catch((error: unknown) => error as Error & { code: string });
   };
 
   it('explains a 400 with the Google message and a checklist (issues 7, 69)', async () => {
@@ -183,7 +183,7 @@ describe('WebStoreClient errors', () => {
     mockHttp({ [UPLOAD]: { status: 500, text: 'Internal oops' } });
     const error = await make()
       .upload(Buffer.from('z'))
-      .catch((e: unknown) => e as Error & { code: string });
+      .catch((error_: unknown) => error_ as Error & { code: string });
     expect(error.code).toBe('EWEBSTOREHTTP');
     expect(error.message).toContain('Internal oops');
   });
@@ -274,13 +274,12 @@ describe('WebStoreClient.publish', () => {
 
 describe('WebStoreClient polling edge cases', () => {
   const polling = (status: unknown, extra: Record<string, unknown> = {}) => {
-    const calls = mockHttp({
+    return mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: status as never,
       [PUBLISH]: { json: { state: 'PUBLISHED' } },
       ...extra,
     });
-    return calls;
   };
   const published = (calls: { url: string }[]) =>
     calls.some((c) => c.url.endsWith(':publish'));
@@ -476,7 +475,7 @@ describe('auth', () => {
 
     it('reports each missing OAuth variable with the original codes', async () => {
       const error = await resolveCredentials({ GOOGLE_CLIENT_ID: 'id' }).catch(
-        (e: unknown) => e as AggregateError,
+        (error_: unknown) => error_ as AggregateError,
       );
       expect(
         (error as AggregateError).errors.map((e: { code: string }) => e.code),
@@ -624,7 +623,7 @@ describe('auth', () => {
         clientId: 'id',
         clientSecret: 'secret',
         refreshToken: 'SUPER-SECRET-REFRESH',
-      }).catch((e: unknown) => e as Error & { code: string });
+      }).catch((error_: unknown) => error_ as Error & { code: string });
       expect(error.code).toBe('EREFRESHTOKEN');
       expect(error.message).toContain('7 days');
       expect(error.message).toContain('workload identity federation');
@@ -673,7 +672,7 @@ describe('auth', () => {
         clientId: 'id',
         clientSecret: 'TOPSECRET',
         refreshToken: 'REFRESH',
-      }).catch((e: unknown) => e as Error & { code: string });
+      }).catch((error_: unknown) => error_ as Error & { code: string });
       expect(error.code).toBe('EAUTH');
       expect(error.message).not.toMatch(/TOPSECRET|REFRESH/);
     });
@@ -830,7 +829,7 @@ describe('request', () => {
       'https://x.test/a?token=secret',
       { headers: { Authorization: 'Bearer secret' } },
       via({ retries: 1 }),
-    ).catch((e: unknown) => e);
+    ).catch((error_: unknown) => error_);
     expect(String(error)).toBe(
       'Error: Network error calling x.test: socket hang up',
     );
@@ -864,7 +863,7 @@ describe('request', () => {
     const saved = { ...process.env };
     process.env.HTTPS_PROXY = 'http://user:PW-SECRET@bad host:3128';
     try {
-      const error = await request(URL_A, {}).catch((e: unknown) => e);
+      const error = await request(URL_A, {}).catch((error_: unknown) => error_);
       expect(error).toMatchObject({ code: 'EPROXY' });
       const shown = [
         String(error),
@@ -973,7 +972,7 @@ describe('request over a real socket', () => {
     );
     expect(result).toMatchObject({ status: 200, body: { ok: 1 } });
     expect(seen).toHaveLength(2);
-  }, 15000);
+  }, 15_000);
 
   it('gives up with one request per attempt when every attempt stalls', async () => {
     const { url, seen } = await serve(() => undefined);
@@ -985,7 +984,7 @@ describe('request over a real socket', () => {
       ),
     ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
     expect(seen).toHaveLength(2);
-  }, 15000);
+  }, 15_000);
 
   it('stops at the deadline, which does not include a back-off when nothing is retried', async () => {
     const { url } = await serve(() => undefined);
@@ -994,7 +993,7 @@ describe('request over a real socket', () => {
       /aborted due to timeout/,
     );
     expect(Date.now() - started).toBeLessThan(2000);
-  }, 15000);
+  }, 15_000);
 
   it('sends exactly retries + 1 whole requests when the body is always cut short', async () => {
     const { url, seen } = await serve((_req, res) => {
@@ -1010,7 +1009,7 @@ describe('request over a real socket', () => {
       ),
     ).rejects.toThrow(/other side closed/);
     expect(seen).toEqual(['POST /a', 'POST /a', 'POST /a']);
-  }, 15000);
+  }, 15_000);
 
   it('sends the whole request again, never a Range resume, when the body is cut once', async () => {
     const { url, seen } = await serve((_req, res) => {
@@ -1078,7 +1077,7 @@ describe('request over a real socket', () => {
     const error = await request(
       `http://localhost:${server.port}/a?token=SECRET`,
       { headers: { Authorization: 'Bearer SECRET' } },
-    ).catch((e: unknown) => e);
+    ).catch((error_: unknown) => error_);
     expect(String(error)).toContain('ECONNREFUSED');
     expect(String(error)).not.toContain('SECRET');
   });
@@ -1131,7 +1130,7 @@ describe('request over a real socket', () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(proxy.connects()).toBe(connects);
     },
-    15000,
+    15_000,
   );
 
   describe('redirects', () => {
@@ -1358,7 +1357,7 @@ describe('client', () => {
       });
       const error = (await client
         .rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.1' })
-        .catch((e: unknown) => e)) as Error;
+        .catch((error_: unknown) => error_)) as Error;
       expect(error.message).not.toContain('SECRET-TOKEN');
     });
   });
@@ -1502,7 +1501,7 @@ describe('WebStoreClient response parsing', () => {
     });
     const error = await make()
       .upload(Buffer.from('z'))
-      .catch((e: unknown) => e as Error);
+      .catch((error_: unknown) => error_ as Error);
     expect((error as Error).message).toContain('(R1)');
   });
 });
