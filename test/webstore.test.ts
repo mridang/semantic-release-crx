@@ -32,7 +32,20 @@ const { privateKey, publicKey } = await generateKeyPairAsync('rsa', {
   publicKeyEncoding: { type: 'spki', format: 'pem' },
 });
 
-afterEach(() => jest.restoreAllMocks());
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
+const failureOf = async (
+  promise: Promise<unknown>,
+): Promise<Error & { code: string }> => {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error & { code: string };
+  }
+  throw new Error('expected the promise to reject');
+};
 
 const make = (lines: string[] = [], overrides = {}): WebStoreClient =>
   new WebStoreClient({
@@ -145,13 +158,17 @@ describe('WebStoreClient.upload', () => {
 });
 
 describe('WebStoreClient errors', () => {
-  const failing = async (status: number, json: unknown) => {
+  const failing = async (
+    status: number,
+    json: unknown,
+  ): Promise<Error & { code: string }> => {
     mockHttp({ [UPLOAD]: { status, json } });
     try {
-      return await make().upload(Buffer.from('z'));
+      await make().upload(Buffer.from('z'));
     } catch (error) {
       return error as Error & { code: string };
     }
+    throw new Error('expected the upload to fail');
   };
 
   it('explains a 400 with the Google message and a checklist (issues 7, 69)', async () => {
@@ -194,9 +211,7 @@ describe('WebStoreClient errors', () => {
 
   it('handles other statuses and non JSON bodies', async () => {
     mockHttp({ [UPLOAD]: { status: 500, text: 'Internal oops' } });
-    const failure = await make()
-      .upload(Buffer.from('z'))
-      .catch((error: unknown) => error as Error & { code: string });
+    const failure = await failureOf(make().upload(Buffer.from('z')));
     expect(failure.code).toBe('EWEBSTOREHTTP');
     expect(failure.message).toContain('Internal oops');
   });
@@ -444,7 +459,9 @@ describe('WebStoreClient.submit', () => {
 
 // eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('auth', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   const TOKEN = 'POST https://oauth2.googleapis.com/token';
 
@@ -626,12 +643,14 @@ describe('auth', () => {
           },
         },
       });
-      const failure = await tokenFor({
-        kind: 'oauth',
-        clientId: 'id',
-        clientSecret: 'secret',
-        refreshToken: 'SUPER-SECRET-REFRESH',
-      }).catch((error: unknown) => error as Error & { code: string });
+      const failure = await failureOf(
+        tokenFor({
+          kind: 'oauth',
+          clientId: 'id',
+          clientSecret: 'secret',
+          refreshToken: 'SUPER-SECRET-REFRESH',
+        }),
+      );
       expect(failure.code).toBe('EREFRESHTOKEN');
       expect(failure.message).toContain('7 days');
       expect(failure.message).toContain('workload identity federation');
@@ -675,12 +694,14 @@ describe('auth', () => {
 
     it('reports a network failure without leaking the request', async () => {
       failHttp('https://oauth2.googleapis.com', new Error('offline'));
-      const failure = await tokenFor({
-        kind: 'oauth',
-        clientId: 'id',
-        clientSecret: 'TOPSECRET',
-        refreshToken: 'REFRESH',
-      }).catch((error: unknown) => error as Error & { code: string });
+      const failure = await failureOf(
+        tokenFor({
+          kind: 'oauth',
+          clientId: 'id',
+          clientSecret: 'TOPSECRET',
+          refreshToken: 'REFRESH',
+        }),
+      );
       expect(failure.code).toBe('EAUTH');
       expect(failure.message).not.toMatch(/TOPSECRET|REFRESH/);
     });
@@ -1268,7 +1289,9 @@ describe('request over a real socket', () => {
 });
 
 describe('client', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   const base = {
     publisherId: 'pub-1',
@@ -1428,7 +1451,9 @@ describe('client', () => {
 });
 
 describe('WebStoreClient response parsing', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   it('keeps well-formed status fields, including distribution channels', async () => {
     mockHttp({
@@ -1524,7 +1549,9 @@ describe('WebStoreClient response parsing', () => {
 });
 
 describe('WebStoreClient.connect', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   it('uses the default polling settings unless overridden', async () => {
     mockHttp({
@@ -1567,7 +1594,9 @@ describe('WebStoreClient.connect', () => {
 });
 
 describe('WebStoreClient.connect', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   it('uses the default polling settings unless overridden', async () => {
     mockHttp({
