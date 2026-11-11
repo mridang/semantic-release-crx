@@ -126,7 +126,6 @@ export class Extension {
     }, Promise.resolve());
   }
 
-  /* eslint-disable jsdoc/check-tag-names -- @rejects is required by jsdoc/require-rejects, which typescript mode does not list */
 
   /**
    * Zip the folder with its contents at the archive root, as the Chrome Web
@@ -144,7 +143,6 @@ export class Extension {
    *   'release/extension.zip',
    * );
    */
-  /* eslint-enable jsdoc/check-tag-names -- ends the range opened above for the zip docblock */
   async zip(output: string): Promise<number> {
     const root = nodePath.resolve(this.distFolder);
     const target = nodePath.resolve(output);
