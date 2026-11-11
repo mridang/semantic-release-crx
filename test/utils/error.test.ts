@@ -2,6 +2,9 @@ import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { codeOf, messageOf } from '../../src/utils/error.js';
 
+const blank = <T extends Error>(error: T): T =>
+  Object.assign(error, { message: '' });
+
 describe('messageOf', () => {
   it('reads the message of an Error', () => {
     expect(messageOf(new Error('boom'))).toBe('boom');
@@ -15,7 +18,7 @@ describe('messageOf', () => {
 
   it('describes an error without a message by its code', () => {
     expect(
-      messageOf(Object.assign(new Error(''), { code: 'ECONNREFUSED' })),
+      messageOf(Object.assign(blank(new Error('x')), { code: 'ECONNREFUSED' })),
     ).toBe('ECONNREFUSED');
   });
 
@@ -23,21 +26,26 @@ describe('messageOf', () => {
     const inner = Object.assign(new Error('connect ECONNREFUSED ::1:443'), {
       code: 'ECONNREFUSED',
     });
-    expect(messageOf(new AggregateError([inner, new Error('other')], ''))).toBe(
-      'connect ECONNREFUSED ::1:443',
-    );
+    expect(
+      messageOf(blank(new AggregateError([inner, new Error('other')], 'x'))),
+    ).toBe('connect ECONNREFUSED ::1:443');
   });
 
   it('prefers the code of an aggregate error over its inner errors', () => {
-    const error = Object.assign(new AggregateError([new Error('inner')], ''), {
-      code: 'ECONNREFUSED',
-    });
+    const error = Object.assign(
+      blank(new AggregateError([new Error('inner')], 'x')),
+      {
+        code: 'ECONNREFUSED',
+      },
+    );
     expect(messageOf(error)).toBe('ECONNREFUSED');
   });
 
   it('falls back to the name of an error with nothing else to say', () => {
-    expect(messageOf(new AggregateError([], ''))).toBe('AggregateError');
-    expect(messageOf(new TypeError(''))).toBe('TypeError');
+    expect(messageOf(blank(new AggregateError([], 'x')))).toBe(
+      'AggregateError',
+    );
+    expect(messageOf(blank(new TypeError('x')))).toBe('TypeError');
   });
 
   it('recognises an error from another realm by its shape', () => {

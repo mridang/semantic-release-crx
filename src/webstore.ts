@@ -452,10 +452,12 @@ export async function request(
             throwOnError: false,
             // Cancel the wait when the deadline passes, so that it cannot
             // hold the process after the call has given up.
+            // eslint-disable-next-line promise/prefer-await-to-callbacks -- undici's RetryAgent retry hook is callback-only
             retry: (error, { state, opts }, callback) => {
               if (
                 !isRetryable(error, opts.method, methods, state.counter, left)
               ) {
+                // eslint-disable-next-line promise/prefer-await-to-callbacks -- undici's RetryAgent retry hook is callback-only
                 callback(error);
                 return;
               }

@@ -496,6 +496,7 @@ describe('prepare', () => {
   });
 });
 
+// eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('publish', () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -522,6 +523,7 @@ describe('publish', () => {
   const withAsset = (fn: (dir: string) => Promise<void>) =>
     withTmp({ 'ext-v1.1.0.zip': 'PK-fake-zip' }, fn);
 
+  // eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
   describe('publish', () => {
     it('uploads, then publishes, and returns the release link', async () => {
       await withAsset(async (dir) => {

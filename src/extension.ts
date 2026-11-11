@@ -126,7 +126,6 @@ export class Extension {
     }, Promise.resolve());
   }
 
-
   /**
    * Zip the folder with its contents at the archive root, as the Chrome Web
    * Store requires. The zip is complete on disk when this resolves and is

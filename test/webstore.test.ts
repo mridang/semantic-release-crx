@@ -436,6 +436,7 @@ describe('WebStoreClient.submit', () => {
   });
 });
 
+// eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('auth', () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -860,9 +861,13 @@ describe('request', () => {
   it('names the code of a failure with an empty message, such as a dual-stack refusal', async () => {
     failHttp(
       'https://x.test',
-      Object.assign(new AggregateError([new Error('v4'), new Error('v6')]), {
-        code: 'ECONNREFUSED',
-      }),
+      Object.assign(
+        new AggregateError([new Error('v4'), new Error('v6')], 'x'),
+        {
+          code: 'ECONNREFUSED',
+          message: '',
+        },
+      ),
     );
     await expect(request(URL_A, {}, via())).rejects.toThrow(
       'Network error calling x.test: ECONNREFUSED',
@@ -890,6 +895,7 @@ describe('request', () => {
   });
 });
 
+// eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('request over a real socket', () => {
   const stops: (() => Promise<void>)[] = [];
   const saved = { ...process.env };
