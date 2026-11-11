@@ -1,3 +1,6 @@
+/**
+ * @file Public client entry point that re-exports the Chrome Web Store calls.
+ */
 export {
   cancelSubmission,
   fetchStatus,

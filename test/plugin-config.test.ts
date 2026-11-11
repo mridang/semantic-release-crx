@@ -123,7 +123,9 @@ describe('settings', () => {
       'rejects pollTimeoutMs %s so the wait stays bounded',
       (value) => {
         expect(
-          validateConfig({ pollTimeoutMs: value as never }, false).map(codeOf),
+          validateConfig({ pollTimeoutMs: value as never }, false).map(
+            (error) => codeOf(error),
+          ),
         ).toEqual(['EINVALIDPOLL']);
       },
     );
@@ -132,7 +134,9 @@ describe('settings', () => {
       'rejects pollIntervalMs %s',
       (value) => {
         expect(
-          validateConfig({ pollIntervalMs: value as never }, false).map(codeOf),
+          validateConfig({ pollIntervalMs: value as never }, false).map(
+            (error) => codeOf(error),
+          ),
         ).toEqual(['EINVALIDPOLL']);
       },
     );
@@ -161,7 +165,9 @@ describe('settings', () => {
     });
 
     it('requires asset when asked to', () => {
-      expect(validateConfig({}, true).map(codeOf)).toEqual(['ENOASSET']);
+      expect(validateConfig({}, true).map((error) => codeOf(error))).toEqual([
+        'ENOASSET',
+      ]);
       expect(validateConfig({}, false)).toEqual([]);
     });
 
@@ -174,7 +180,7 @@ describe('settings', () => {
         },
         false,
       );
-      expect(problems.map(codeOf)).toEqual([
+      expect(problems.map((error) => codeOf(error))).toEqual([
         'EINVALIDTARGET',
         'EINVALIDPRERELEASE',
         'EINVALIDDEPLOYPERCENTAGE',

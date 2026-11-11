@@ -1,6 +1,7 @@
+import { loadFixture } from './utils/fixtures.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import path from 'node:path';
 import { mockHttp } from './utils/http-mock.js';
 import {
   BASE,
@@ -26,30 +27,33 @@ import {
   publish,
   verifyConditions,
 } from '../src/index.js';
-import * as plugin from '../src/index.js';
 // @ts-expect-error semantic-release internals are not typed
 import loadPlugins from 'semantic-release/lib/plugins/index.js';
+
+const versions = await loadFixture('manifest-versions.json');
+
+// Undefined without writing undefined: a spread then overrides the default with undefined.
+let unset: undefined;
 
 afterEach(() => jest.restoreAllMocks());
 
 describe('plugin entry point', () => {
-  it('exports the semantic-release steps, like semantic-release-chrome', () => {
-    expect(Object.keys(plugin).sort()).toEqual([
+  it('exports the semantic-release steps, like semantic-release-chrome', async () => {
+    const plugin = await import('../src/index.js');
+    expect(Object.keys(plugin).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'addChannel',
       'default',
       'prepare',
       'publish',
       'verifyConditions',
     ]);
-    expect(Object.keys(plugin.default).sort()).toEqual([
-      'addChannel',
-      'prepare',
-      'publish',
-      'verifyConditions',
-    ]);
+    expect(
+      Object.keys(plugin.default).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(['addChannel', 'prepare', 'publish', 'verifyConditions']);
   });
 
   it('versions, zips, uploads and publishes in the order semantic-release runs the steps', async () => {
+    const plugin = await import('../src/index.js');
     await withTmp(
       {
         'dist/manifest.json': '{ "name": "Demo", "version": "0.0.0" }',
@@ -71,19 +75,21 @@ describe('plugin entry point', () => {
         );
         const uploaded = calls.find((c) => c.url.endsWith(':upload'))
           ?.body as Uint8Array;
-        const entries = unzip(Buffer.from(uploaded));
+        const entries = await unzip(Buffer.from(uploaded));
         expect(JSON.parse(entries['manifest.json'].toString()).version).toBe(
           '1.1.0',
         );
         expect(
-          JSON.parse(await readFile(join(dir, 'dist/manifest.json'), 'utf8'))
-            .version,
+          JSON.parse(
+            await readFile(path.join(dir, 'dist/manifest.json'), 'utf8'),
+          ).version,
         ).toBe('1.1.0');
       },
     );
   });
 
   it('is loaded by the real semantic-release plugin loader, addChannel included', async () => {
+    const plugin = await import('../src/index.js');
     const calls = mockHttp({
       [`POST https://chromewebstore.googleapis.com/v2/${ITEM}:setPublishedDeployPercentage`]:
         { json: {} },
@@ -151,11 +157,11 @@ describe('verifyConditions', () => {
   };
 
   const codes = async (promise: Promise<unknown>): Promise<string[]> => {
-    const error = await promise.catch((e: unknown) => e);
+    const failure = await promise.catch((error: unknown) => error);
     const list =
-      error instanceof AggregateError
-        ? (error.errors as Error[])
-        : [error as Error];
+      failure instanceof AggregateError
+        ? (failure.errors as Error[])
+        : [failure as Error];
     return list.map((e) => (e as Error & { code: string }).code);
   };
 
@@ -176,7 +182,7 @@ describe('verifyConditions', () => {
     it('does nothing for target local, even without credentials', async () => {
       const calls = mockHttp({});
       const { result, lines } = run(
-        { target: 'local', extensionId: undefined },
+        { target: 'local', extensionId: unset },
         { env: {} },
       );
       await result;
@@ -206,7 +212,7 @@ describe('verifyConditions', () => {
     it('reports every configuration problem at once', async () => {
       mockHttp({});
       const { result } = run(
-        { extensionId: undefined, publisherId: undefined, target: 'nope' },
+        { extensionId: unset, publisherId: unset, target: 'nope' },
         { env: {} },
       );
       expect(await codes(result)).toEqual([
@@ -266,11 +272,13 @@ describe('verifyConditions', () => {
         },
       });
       const { result } = run({});
-      const error = (await result.catch((e: unknown) => e)) as Error & {
+      const failure = (await result.catch(
+        (error: unknown) => error,
+      )) as Error & {
         code: string;
       };
-      expect(error.code).toBe('EWEBSTOREAUTH');
-      expect(error.message).not.toContain('SECRET-TOKEN');
+      expect(failure.code).toBe('EWEBSTOREAUTH');
+      expect(failure.message).not.toContain('SECRET-TOKEN');
     });
 
     it('warns about a taken down or warned item', async () => {
@@ -316,18 +324,19 @@ describe('prepare', () => {
         const { result, lines } = run(dir, {});
         await result;
         const manifest = await readFile(
-          join(dir, 'dist/manifest.json'),
+          path.join(dir, 'dist/manifest.json'),
           'utf8',
         );
         expect(manifest).toContain('// note');
         expect(JSON.parse(manifest.replace('// note', ''))).toMatchObject({
           version: '1.1.0',
         });
-        const entries = unzip(await readFile(join(dir, 'ext-v1.1.0.zip')));
-        expect(Object.keys(entries).sort()).toEqual([
-          'background.js',
-          'manifest.json',
-        ]);
+        const entries = await unzip(
+          await readFile(path.join(dir, 'ext-v1.1.0.zip')),
+        );
+        expect(
+          Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+        ).toEqual(['background.js', 'manifest.json']);
         expect(entries['manifest.json'].toString()).toContain(
           '"version": "1.1.0"',
         );
@@ -349,7 +358,7 @@ describe('prepare', () => {
           }).result;
           expect(
             JSON.parse(
-              await readFile(join(dir, 'build/ext/manifest.json'), 'utf8'),
+              await readFile(path.join(dir, 'build/ext/manifest.json'), 'utf8'),
             ),
           ).toEqual({
             version: '1.1.0',
@@ -362,7 +371,9 @@ describe('prepare', () => {
       await withTmp(files, async (dir) => {
         await run(dir, { additionalManifests: ['src/manifest.json'] }).result;
         expect(
-          JSON.parse(await readFile(join(dir, 'src/manifest.json'), 'utf8')),
+          JSON.parse(
+            await readFile(path.join(dir, 'src/manifest.json'), 'utf8'),
+          ),
         ).toEqual({
           version: '1.1.0',
         });
@@ -374,7 +385,9 @@ describe('prepare', () => {
         await run(dir, {
           asset: 'out/${branch.name}-${nextRelease.version}.zip',
         }).result;
-        const entries = unzip(await readFile(join(dir, 'out/main-1.1.0.zip')));
+        const entries = await unzip(
+          await readFile(path.join(dir, 'out/main-1.1.0.zip')),
+        );
         expect(entries['manifest.json'].toString()).toContain('1.1.0');
       });
     });
@@ -382,15 +395,12 @@ describe('prepare', () => {
     it('writes a four part version for a pre-release (issue 111)', async () => {
       await withTmp(files, async (dir) => {
         await run(dir, {}, { nextRelease: { version: '1.2.0-beta.4' } }).result;
-        expect(
-          JSON.parse(
-            (await readFile(join(dir, 'dist/manifest.json'), 'utf8')).replace(
-              '// note',
-              '',
-            ),
-          ),
-        ).toMatchObject({
-          version: '1.2.0.4',
+        const source = await readFile(
+          path.join(dir, 'dist/manifest.json'),
+          'utf8',
+        );
+        expect(JSON.parse(source.replace('// note', ''))).toMatchObject({
+          version: versions.beta4,
           version_name: '1.2.0-beta.4',
         });
       });
@@ -411,13 +421,13 @@ describe('prepare', () => {
     it('works with target local', async () => {
       await withTmp(files, async (dir) => {
         await run(dir, { target: 'local' }).result;
-        expect(await readFile(join(dir, 'ext-v1.1.0.zip'))).toBeDefined();
+        expect(await readFile(path.join(dir, 'ext-v1.1.0.zip'))).toBeDefined();
       });
     });
 
     it('requires asset (ENOASSET)', async () => {
       await withTmp(files, async (dir) => {
-        await expect(run(dir, { asset: undefined }).result).rejects.toThrow(
+        await expect(run(dir, { asset: unset }).result).rejects.toThrow(
           expect.objectContaining({
             errors: [expect.objectContaining({ code: 'ENOASSET' })],
           }),
@@ -428,7 +438,7 @@ describe('prepare', () => {
     it('requires a version from semantic-release', async () => {
       await withTmp(files, async (dir) => {
         await expect(
-          run(dir, {}, { nextRelease: undefined }).result,
+          run(dir, {}, { nextRelease: unset }).result,
         ).rejects.toMatchObject({
           code: 'ENOVERSION',
         });
@@ -465,14 +475,16 @@ describe('prepare', () => {
           },
           { lastRelease: { version: '1.0.0' }, commits: [{}, {}] },
         ).result;
-        expect(await readFile(join(dir, '1.0.0-1.1.0-2.zip'))).toBeDefined();
+        expect(
+          await readFile(path.join(dir, '1.0.0-1.1.0-2.zip')),
+        ).toBeDefined();
       });
     });
 
     it('writes to an absolute asset path as given', async () => {
       await withTmp(files, async (dir) => {
-        await run(dir, { asset: join(dir, 'abs', 'ext.zip') }).result;
-        expect(await readFile(join(dir, 'abs', 'ext.zip'))).toBeDefined();
+        await run(dir, { asset: path.join(dir, 'abs', 'ext.zip') }).result;
+        expect(await readFile(path.join(dir, 'abs', 'ext.zip'))).toBeDefined();
       });
     });
 
@@ -488,6 +500,7 @@ describe('prepare', () => {
   });
 });
 
+// eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('publish', () => {
   afterEach(() => jest.restoreAllMocks());
 
@@ -514,6 +527,7 @@ describe('publish', () => {
   const withAsset = (fn: (dir: string) => Promise<void>) =>
     withTmp({ 'ext-v1.1.0.zip': 'PK-fake-zip' }, fn);
 
+  // eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
   describe('publish', () => {
     it('uploads, then publishes, and returns the release link', async () => {
       await withAsset(async (dir) => {
@@ -605,7 +619,7 @@ describe('publish', () => {
       await withAsset(async (dir) => {
         const calls = mock({ [UPLOAD]: OK_UPLOAD });
         const { result, lines } = run(dir, { target: 'draft' });
-        expect((await result)?.name).toBe('Chrome Web Store');
+        expect(await result).toMatchObject({ name: 'Chrome Web Store' });
         expect(calls).toHaveLength(2);
         expect(lines.join('\n')).toMatch(/skipping publish step/);
       });
@@ -615,7 +629,7 @@ describe('publish', () => {
       const calls = mock({});
       const { result, lines } = run('/nowhere', {
         target: 'local',
-        extensionId: undefined,
+        extensionId: unset,
       });
       expect(await result).toBeUndefined();
       expect(calls).toHaveLength(0);
@@ -680,7 +694,7 @@ describe('publish', () => {
           },
         });
         const { result, lines } = run(dir, { failOnWarnings: true });
-        expect((await result)?.name).toBe('Chrome Web Store');
+        expect(await result).toMatchObject({ name: 'Chrome Web Store' });
         expect(lines.join('\n')).toContain(
           'PUBLISHED_WITH_FRICTION_WARNING: needs extra time to review',
         );
@@ -727,13 +741,11 @@ describe('publish', () => {
           },
         });
         expect(
-          (
-            await run(dir, {
-              failOnWarnings: true,
-              ignoredWarnings: ['BROAD_HOSTS', ''],
-            }).result
-          )?.name,
-        ).toBe('Chrome Web Store');
+          await run(dir, {
+            failOnWarnings: true,
+            ignoredWarnings: ['BROAD_HOSTS', ''],
+          }).result,
+        ).toMatchObject({ name: 'Chrome Web Store' });
       });
     });
 
@@ -770,7 +782,9 @@ describe('publish', () => {
           'PUBLISHED_TO_TESTERS',
         ]) {
           mock({ [UPLOAD]: OK_UPLOAD, [PUBLISH]: { json: { state } } });
-          expect((await run(dir).result)?.url).toContain('ext-1');
+          expect(await run(dir).result).toMatchObject({
+            url: expect.stringContaining('ext-1'),
+          });
         }
       });
     });
@@ -810,9 +824,9 @@ describe('publish', () => {
         expect(await skipped.result).toBeUndefined();
         expect(calls).toHaveLength(0);
         expect(skipped.lines[0]).toMatch(/pre-release/);
-        expect((await run(dir, { prerelease: 'skip' }).result)?.name).toBe(
-          'Chrome Web Store',
-        );
+        expect(await run(dir, { prerelease: 'skip' }).result).toMatchObject({
+          name: 'Chrome Web Store',
+        });
       });
     });
 
@@ -829,9 +843,9 @@ describe('publish', () => {
           { extensionId: { main: 'prod-id', beta: 'staging-id' } },
           { branch: { name: 'beta' } },
         );
-        expect((await result)?.url).toBe(
-          'https://chromewebstore.google.com/detail/staging-id',
-        );
+        expect(await result).toMatchObject({
+          url: 'https://chromewebstore.google.com/detail/staging-id',
+        });
         expect(calls.every((c) => c.url.includes('staging-id'))).toBe(true);
       });
     });
@@ -840,12 +854,14 @@ describe('publish', () => {
       mock({});
       const { result } = run(
         '/nowhere',
-        { extensionId: undefined, publisherId: undefined, asset: undefined },
+        { extensionId: unset, publisherId: unset, asset: unset },
         { env: {} },
       );
-      const error = (await result.catch((e: unknown) => e)) as AggregateError;
+      const failure = (await result.catch(
+        (error: unknown) => error,
+      )) as AggregateError;
       expect(
-        error.errors.map((e: Error & { code?: string }) => e.code),
+        failure.errors.map((e: Error & { code?: string }) => e.code),
       ).toEqual(['ENOASSET', 'ENOEXTENSIONID', 'ENOPUBLISHERID']);
     });
 
@@ -874,22 +890,24 @@ describe('publish', () => {
           [PUBLISH]: { status: 403, json: { error: { message: 'denied' } } },
         });
         const { result, lines } = run(dir);
-        const error = (await result.catch((e: unknown) => e)) as Error;
-        expect(error.message).not.toContain('SECRET-TOKEN');
+        const failure = (await result.catch(
+          (error: unknown) => error,
+        )) as Error;
+        expect(failure.message).not.toContain('SECRET-TOKEN');
         expect(lines.join('\n')).not.toContain('SECRET-TOKEN');
       });
     });
 
     it('reads the zip the asset template points at', async () => {
       await withTmp({}, async (dir) => {
-        await writeFile(join(dir, 'chrome-main.zip'), 'zip');
+        await writeFile(path.join(dir, 'chrome-main.zip'), 'zip');
         mock({
           [UPLOAD]: OK_UPLOAD,
           [PUBLISH]: { json: { state: 'PUBLISHED' } },
         });
         expect(
-          (await run(dir, { asset: 'chrome-${branch.name}.zip' }).result)?.name,
-        ).toBe('Chrome Web Store');
+          await run(dir, { asset: 'chrome-${branch.name}.zip' }).result,
+        ).toMatchObject({ name: 'Chrome Web Store' });
       });
     });
   });
@@ -969,11 +987,11 @@ describe('publish', () => {
             },
           },
         });
-        const error = (await run(dir, { failOnWarnings: true }).result.catch(
-          (e: unknown) => e,
+        const failure = (await run(dir, { failOnWarnings: true }).result.catch(
+          (error: unknown) => error,
         )) as AggregateError;
-        expect(error).toBeInstanceOf(AggregateError);
-        expect(error.errors).toEqual([
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure.errors).toEqual([
           expect.objectContaining({ code: 'BROAD_HOSTS', message: 'broad' }),
         ]);
       });
@@ -1083,7 +1101,7 @@ describe('publish', () => {
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
         });
         const { result, lines } = run(dir);
-        expect((await result)?.name).toBe('Chrome Web Store');
+        expect(await result).toMatchObject({ name: 'Chrome Web Store' });
         expect(lines.join('\n')).toMatch(
           /Could not check for a pending submission/,
         );
@@ -1158,18 +1176,22 @@ describe('addChannel', () => {
     });
 
     it('accepts 0 and 100', async () => {
-      mockHttp({ [PROMOTE]: { json: {} } });
+      const calls = mockHttp({ [PROMOTE]: { json: {} } });
       await run({ promoteDeployPercentage: 0 }).result;
       await run({ promoteDeployPercentage: 100 }).result;
+      expect(calls.map((c) => c.body)).toEqual([
+        { deployPercentage: 0 },
+        { deployPercentage: 100 },
+      ]);
     });
 
     it('rejects an invalid percentage with the deployPercentage code', async () => {
       mockHttp({});
       for (const value of [101, -1, 2.5]) {
-        const error = (await run({
+        const failure = (await run({
           promoteDeployPercentage: value,
-        }).result.catch((e: unknown) => e)) as AggregateError;
-        expect(error.errors[0]).toMatchObject({
+        }).result.catch((error: unknown) => error)) as AggregateError;
+        expect(failure.errors[0]).toMatchObject({
           code: 'EINVALIDDEPLOYPERCENTAGE',
         });
       }
@@ -1180,11 +1202,11 @@ describe('addChannel', () => {
       const missing = (await run(
         {
           promoteDeployPercentage: 5,
-          extensionId: undefined,
-          publisherId: undefined,
+          extensionId: unset,
+          publisherId: unset,
         },
         { env: {} },
-      ).result.catch((e: unknown) => e)) as AggregateError;
+      ).result.catch((error: unknown) => error)) as AggregateError;
       expect(
         missing.errors.map((e: Error & { code?: string }) => e.code),
       ).toEqual(['ENOEXTENSIONID', 'ENOPUBLISHERID']);
@@ -1227,10 +1249,10 @@ describe('addChannel', () => {
         await run(
           {
             promoteDeployPercentage: 5,
-            pollIntervalMs: undefined,
-            pollTimeoutMs: undefined,
+            pollIntervalMs: unset,
+            pollTimeoutMs: unset,
           },
-          { env: undefined },
+          { env: unset },
         ).result;
         expect(calls[0].headers.authorization).toBe('Bearer ENV-TOKEN');
       } finally {

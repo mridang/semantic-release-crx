@@ -137,8 +137,7 @@ export const DEFAULT_DIST_FOLDER = 'dist';
 
 /**
  * The manifest path to use when none is configured.
- *
- * @param config Plugin configuration.
+ * @param config - Plugin configuration.
  * @returns The configured manifest path or `<distFolder>/manifest.json`.
  */
 export function manifestPathOf(config: CrxPluginConfig): string {
@@ -158,9 +157,8 @@ type Lookup =
 /**
  * Pick the item ID for the branch being released. A plain string applies to
  * every branch; a map lets pre-release branches publish to their own item.
- *
- * @param config Plugin configuration.
- * @param context Step context providing the branch.
+ * @param config - Plugin configuration.
+ * @param context - Step context providing the branch.
  * @returns The item ID, or an error describing what is wrong.
  */
 export function resolveExtensionId(
@@ -174,7 +172,7 @@ export function resolveExtensionId(
   if (isRecord(extensionId)) {
     const branch = context.branch?.name;
     const id =
-      branch !== undefined && Object.hasOwn(extensionId, branch)
+      typeof branch === 'string' && Object.hasOwn(extensionId, branch)
         ? extensionId[branch]
         : undefined;
     return id
@@ -198,9 +196,8 @@ export function resolveExtensionId(
 
 /**
  * Find the publisher ID, from the option or `CHROME_PUBLISHER_ID`.
- *
- * @param config Plugin configuration.
- * @param context Step context providing the environment.
+ * @param config - Plugin configuration.
+ * @param context - Step context providing the environment.
  * @returns The publisher ID, or an error pointing at the dashboard.
  */
 export function resolvePublisherId(
@@ -222,20 +219,35 @@ export function resolvePublisherId(
 }
 
 /**
+ * Whether a value is a finite number above zero.
+ * @param value - Any value from the configuration.
+ * @returns True for a positive, finite number.
+ */
+function isPositiveNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
  * Validate the options that do not need the network.
- *
- * @param config Plugin configuration.
- * @param requireAsset Whether `asset` is mandatory for this step.
+ * @param config - Plugin configuration.
+ * @param requireAsset - Whether `asset` is mandatory for this step.
  * @returns Every problem found, so they can be reported together.
  */
 export function validateConfig(
   config: CrxPluginConfig,
   requireAsset: boolean,
 ): readonly Error[] {
-  const target: unknown = config.target;
-  const prerelease: unknown = config.prerelease;
+  const {
+    asset,
+    target,
+    prerelease,
+  }: {
+    readonly asset?: unknown;
+    readonly target?: unknown;
+    readonly prerelease?: unknown;
+  } = config;
   return [
-    ...(requireAsset && !config.asset
+    ...(requireAsset && !asset
       ? [
           new SemanticReleaseError(
             "Option 'asset' was not included in the config. Check the README.md for config info.",
@@ -261,8 +273,7 @@ export function validateConfig(
       : []),
     ...(['pollIntervalMs', 'pollTimeoutMs'] as const).flatMap((name) => {
       const value: unknown = config[name];
-      return value !== undefined &&
-        !(typeof value === 'number' && Number.isFinite(value) && value > 0)
+      return value !== undefined && !isPositiveNumber(value)
         ? [
             new SemanticReleaseError(
               `Option '${name}' must be a positive number of milliseconds.`,
@@ -289,8 +300,7 @@ export function validateConfig(
 
 /**
  * Collect the errors out of several lookup results.
- *
- * @param results Results of `resolveExtensionId` or `resolvePublisherId`.
+ * @param results - Results of `resolveExtensionId` or `resolvePublisherId`.
  * @returns The errors among them, in order.
  */
 export function errorsOf(...results: readonly Lookup[]): readonly Error[] {

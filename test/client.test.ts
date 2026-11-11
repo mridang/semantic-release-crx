@@ -1,10 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
-// noinspection ES6PreferShortImport
-import * as client from '../src/client.js';
 
 describe('client entry point', () => {
-  it('exports only the four documented calls', () => {
-    expect(Object.keys(client).sort()).toEqual([
+  it('exports only the four documented calls', async () => {
+    // noinspection ES6PreferShortImport
+    const client = await import('../src/client.js');
+    expect(Object.keys(client).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'cancelSubmission',
       'fetchStatus',
       'rollback',

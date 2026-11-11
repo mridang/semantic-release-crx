@@ -17,8 +17,7 @@ export const CONFIG = {
 
 /**
  * Build a semantic-release context for a step.
- *
- * @param extra Properties to add or override.
+ * @param extra - Properties to add or override.
  * @returns The context and the lines logged through it.
  */
 export function stepContext(extra: Record<string, unknown> = {}): {

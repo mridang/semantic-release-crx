@@ -10,6 +10,7 @@ describe('readEnv', () => {
   it('treats unset and blank as undefined', () => {
     expect(readEnv({}, 'A')).toBeUndefined();
     expect(readEnv({ A: '  \n' }, 'A')).toBeUndefined();
-    expect(readEnv({ A: undefined }, 'A')).toBeUndefined();
+    let missing: string | undefined;
+    expect(readEnv({ A: missing }, 'A')).toBeUndefined();
   });
 });

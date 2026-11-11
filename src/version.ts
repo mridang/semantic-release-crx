@@ -1,3 +1,6 @@
+/**
+ * @file Translates semantic-release versions into the versions Chrome accepts.
+ */
 import SemanticReleaseError from '@semantic-release/error';
 
 export interface ManifestVersion {
@@ -19,7 +22,7 @@ export interface ManifestVersion {
 const SEMVER =
   /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
 
-const MAX_PART = 65535;
+const MAX_PART = 65_535;
 
 /**
  * Translate a semantic-release version into what Chrome accepts. Chrome only
@@ -27,11 +30,15 @@ const MAX_PART = 65535;
  * version `1.2.3.4` with `version_name` `1.2.3-beta.4`. The last numeric
  * identifier of the pre-release is used as the fourth part, which keeps
  * successive pre-releases strictly increasing.
- *
- * @param semver Version from `nextRelease.version`.
+ * @param semver - Version from `nextRelease.version`.
  * @returns The manifest fields to write.
  * @throws If the version is not semver, has no numeric pre-release identifier
  * or a part exceeds 65535.
+ * @example
+ * toManifestVersion("1.2.3");
+ * // { version: "1.2.3", versionName: undefined, prerelease: false }
+ * toManifestVersion("1.2.3-beta.4");
+ * // { version: "1.2.3.4", versionName: "1.2.3-beta.4", prerelease: true }
  */
 export function toManifestVersion(semver: string): ManifestVersion {
   const match = SEMVER.exec(semver);
@@ -41,7 +48,8 @@ export function toManifestVersion(semver: string): ManifestVersion {
       'EINVALIDVERSION',
     );
   }
-  const [, major, minor, patch, pre] = match;
+  const [, major, minor, patch] = match;
+  const pre = match[4] as string | undefined;
   const core = [major, minor, patch].map(Number);
   const counter = pre
     ?.split('.')
@@ -61,7 +69,7 @@ export function toManifestVersion(semver: string): ManifestVersion {
       'EINVALIDVERSION',
     );
   }
-  const withoutBuild = semver.split('+')[0];
+  const withoutBuild = semver.split('+', 1)[0];
   return {
     version: parts.join('.'),
     versionName: pre === undefined ? undefined : withoutBuild,

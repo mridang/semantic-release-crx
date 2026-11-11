@@ -26,6 +26,7 @@ export interface HttpResult {
   readonly ok: boolean;
   /** The body: parsed JSON, else the first 500 characters of the text. */
   readonly body: unknown;
+
   /**
    * Where a redirect points, without its query string, which can hold a
    * secret. A redirect is never followed.
@@ -44,21 +45,21 @@ const USER_AGENT = 'semantic-release-crx';
  * The longest a whole call may take, retries and back-off included, unless
  * the call says otherwise.
  */
-const DEADLINE_MS = 120000;
+const DEADLINE_MS = 120_000;
 
 /**
  * The longest a single attempt may wait for the response headers or the body,
  * unless the call says otherwise. An attempt that stalls is abandoned and
  * retried.
  */
-const ATTEMPT_TIMEOUT_MS = 30000;
+const ATTEMPT_TIMEOUT_MS = 30_000;
 
 /**
  * The longest wait between two attempts, which also caps a `Retry-After`
  * header. It is never more than a quarter of the deadline. A wait in progress
  * when the deadline passes is cancelled.
  */
-const MAX_BACKOFF_MS = 15000;
+const MAX_BACKOFF_MS = 15_000;
 
 /**
  * Methods that are safe to repeat. A POST is only retried when the call says
@@ -69,7 +70,7 @@ const IDEMPOTENT_METHODS = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'];
 /**
  * The statuses that are worth another attempt: throttling and server errors.
  */
-const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 /**
  * How many redirects are followed when the call asks for it.
@@ -77,7 +78,7 @@ const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
 const MAX_REDIRECTIONS = 3;
 
 /**
- * The most of a response body that is read. undici stops a larger body, which
+ * The most of a response body that is read. Undici stops a larger body, which
  * is then reported as a failure and not repeated.
  */
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -86,7 +87,7 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
  * Failures worth another attempt. Naming them replaces undici's own list, so
  * it is repeated here with the resolver and timeout codes added.
  */
-const RETRYABLE_ERROR_CODES = [
+const RETRYABLE_ERROR_CODES = new Set([
   'ECONNRESET',
   'ECONNREFUSED',
   'ENOTFOUND',
@@ -101,7 +102,7 @@ const RETRYABLE_ERROR_CODES = [
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
-];
+]);
 
 /**
  * The code of the error that stands for a connection lost after the response
@@ -110,16 +111,18 @@ const RETRYABLE_ERROR_CODES = [
 const BODY_PHASE_CODE = 'UND_ERR_BODY_PHASE';
 
 /**
- * A connection that failed while the response body was being read. undici
+ * A connection that failed while the response body was being read. Undici
  * would resume such a response with a `Range` request, which these APIs
  * ignore; this error is not retried by the retrying agent, so that the whole
  * request is sent again instead.
  */
 class BodyPhaseError extends Error {
+  override name = 'BodyPhaseError';
+
   readonly code = BODY_PHASE_CODE;
 
   /**
-   * @param cause The error that undici reported.
+   * @param cause - The error that undici reported.
    */
   constructor(cause: unknown) {
     super('the connection was lost while reading the response', { cause });
@@ -131,7 +134,6 @@ class BodyPhaseError extends Error {
  * bundled undici cannot be wrapped by `RetryAgent`). They honour the
  * `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` environment variables, which are
  * read when this is called.
- *
  * @param attemptTimeoutMs How long one attempt may wait for the response.
  * @returns A dispatcher with connection and response timeouts and a cap on
  * the size of a response.
@@ -142,7 +144,7 @@ class BodyPhaseError extends Error {
 function connections(attemptTimeoutMs: number): Dispatcher {
   try {
     return new EnvHttpProxyAgent({
-      connect: { timeout: 10000 },
+      connect: { timeout: 10_000 },
       headersTimeout: attemptTimeoutMs,
       bodyTimeout: attemptTimeoutMs,
       maxResponseSize: MAX_BODY_BYTES,
@@ -164,7 +166,6 @@ function connections(attemptTimeoutMs: number): Dispatcher {
 /**
  * Describe a failed request that got no response. The message names the host
  * and the reason, and never the URL, which can hold a secret.
- *
  * @param error A caught value.
  * @param host The host that was called.
  * @returns An error with the reason in its message.
@@ -180,7 +181,6 @@ function networkErrorFor(error: unknown, host: string): Error {
 /**
  * Mark a connection that fails after the response headers arrived, so that
  * the retrying agent leaves it alone (see {@link BodyPhaseError}).
- *
  * @param dispatch The dispatch function to wrap.
  * @returns A dispatch function that wraps the handler.
  */
@@ -206,7 +206,7 @@ function markBodyFailures(
         handler.onResponseError?.(
           controller,
           started.signal.aborted &&
-            RETRYABLE_ERROR_CODES.includes(codeOf(error) ?? '')
+            RETRYABLE_ERROR_CODES.has(codeOf(error) ?? '')
             ? new BodyPhaseError(error)
             : error,
         ),
@@ -216,7 +216,6 @@ function markBodyFailures(
 
 /**
  * Decode a response body.
- *
  * @param text The body as text.
  * @returns The parsed JSON, undefined for an empty body, else the first 500
  * characters of the text.
@@ -235,7 +234,6 @@ function decodeBody(text: string): unknown {
 /**
  * Where a redirect points, without the query (which can hold a secret), the
  * fragment or any user info.
- *
  * @param location The `Location` header.
  * @param base The URL that was called, for a relative `Location`.
  * @returns A URL that is safe to show, or undefined without a usable header.
@@ -252,7 +250,6 @@ function placeOf(location: unknown, base: URL): string | undefined {
  * Where a redirect may be followed to. Only a GET or HEAD request is
  * followed, and only to the same origin, which rules out a change from https
  * to http and keeps the credentials from leaving for another host.
- *
  * @param from The URL that was called.
  * @param method The method of the request.
  * @param status The status of the response.
@@ -280,7 +277,6 @@ function sameOriginRedirect(
 
 /**
  * Whether a failed attempt is worth another one.
- *
  * @param error The error undici reports for the failed attempt.
  * @param method The method of the request.
  * @param methods The methods that may be repeated.
@@ -302,20 +298,19 @@ function isRetryable(
   if (
     code !== undefined &&
     code !== 'UND_ERR_REQ_RETRY' &&
-    !RETRYABLE_ERROR_CODES.includes(code)
+    !RETRYABLE_ERROR_CODES.has(code)
   ) {
     return false;
   }
   const status = isRecord(error) ? numberAt(error, 'statusCode') : undefined;
-  return status === undefined || RETRYABLE_STATUSES.includes(status);
+  return status === undefined || RETRYABLE_STATUSES.has(status);
 }
 
 /**
  * How long to wait before the next attempt: what `Retry-After` asks for, else
  * exponential back-off, never more than `capMs`.
- *
- * @param error The error undici reports for the failed attempt.
- * @param attempt Which retry this is, starting at 1.
+ * @param error - The error undici reports for the failed attempt.
+ * @param attempt - Which retry this is, starting at 1.
  * @param minTimeoutMs The first back-off.
  * @param capMs The longest wait.
  * @returns The wait in milliseconds.
@@ -344,12 +339,14 @@ function waitBeforeRetry(
   return Math.min(backoffMs, capMs);
 }
 
+type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'PUT' | 'DELETE' | 'POST';
+
 /**
  * What the caller of {@link request} can ask for.
  */
 export interface HttpRequest {
   /** The HTTP method. Defaults to `GET`. */
-  readonly method?: 'GET' | 'HEAD' | 'OPTIONS' | 'PUT' | 'DELETE' | 'POST';
+  readonly method?: HttpMethod;
   /** Extra headers, which replace the defaults of the same name in any case. */
   readonly headers?: Readonly<Record<string, string>>;
   /** A text or binary body, which can be sent again if the call is retried. */
@@ -370,12 +367,14 @@ export interface RequestOptions {
   readonly retries?: number;
   /** The first back-off in milliseconds, doubled for each retry. */
   readonly minTimeout?: number;
+
   /**
    * Allow a POST to be retried. Only for a POST that is safe to repeat, such
    * as the token exchange; an upload or a publish never sets it, and without
    * it a POST gets no retries whatever `retries` says.
    */
   readonly retryPost?: boolean;
+
   /**
    * Follow the redirects of a GET or HEAD request, up to three, but only to
    * the same origin. Off by default. A redirect that is not followed is
@@ -400,10 +399,9 @@ export interface RequestOptions {
  * attempt is cancelled and the connections this call created are destroyed,
  * which also stops a proxy tunnel that is still being set up.
  *
- * undici's `request` is used rather than `fetch` because `fetch` turns a body
- * into a one-shot stream, which undici cannot send a second time.
- *
- * @param url Absolute URL to call.
+ * Undici's `request` is used rather than `fetch` because `fetch` turns a body
+ * into a one-shot stream, which undici cannot send a second time..
+ * @param url - Absolute URL to call.
  * @param init Method, headers and body.
  * @param options Timeouts, retries and, for tests, the connections.
  * @returns The status and decoded body.
@@ -421,6 +419,7 @@ export async function request(
     minTimeout = 500,
     retryPost = false,
     followRedirects = false,
+    agent,
   } = options;
   const target = new URL(url);
   const method = init.method ?? 'GET';
@@ -430,9 +429,8 @@ export async function request(
     ? [...IDEMPOTENT_METHODS, 'POST']
     : IDEMPOTENT_METHODS;
   const capMs = Math.min(MAX_BACKOFF_MS, Math.floor(deadlineMs / 4));
-  const own =
-    options.agent === undefined ? connections(attemptTimeoutMs) : undefined;
-  const base = options.agent ?? own;
+  const own = agent === undefined ? connections(attemptTimeoutMs) : undefined;
+  const base = agent ?? own;
   const deadline = AbortSignal.timeout(deadlineMs);
   const finished = new AbortController();
   const headers = Object.fromEntries(
@@ -454,15 +452,15 @@ export async function request(
             throwOnError: false,
             // Cancel the wait when the deadline passes, so that it cannot
             // hold the process after the call has given up.
-            retry: (error, { state, opts }, callback) => {
+            retry: (error, { state, opts }, resume) => {
               if (
                 !isRetryable(error, opts.method, methods, state.counter, left)
               ) {
-                callback(error);
+                resume(error);
                 return;
               }
               const timer = setTimeout(
-                callback,
+                resume,
                 waitBeforeRetry(error, state.counter, minTimeout, capMs),
                 null,
               );
@@ -562,8 +560,7 @@ interface ServiceAccountKey {
 
 /**
  * Read the fields of a service account key out of untrusted JSON.
- *
- * @param value Parsed JSON.
+ * @param value - Parsed JSON.
  * @returns The fields that are strings; the rest are left undefined.
  */
 function parseServiceAccountKey(value: unknown): ServiceAccountKey {
@@ -580,8 +577,7 @@ function parseServiceAccountKey(value: unknown): ServiceAccountKey {
  * Read a service account key from the environment. `GOOGLE_SERVICE_ACCOUNT_KEY`
  * holds the key JSON, optionally base64 encoded so it survives CI secret
  * stores, and `GOOGLE_APPLICATION_CREDENTIALS` holds the path of a key file.
- *
- * @param env Environment variables.
+ * @param env - Environment variables.
  * @returns The parsed key, or undefined when none is configured.
  * @throws If a key is configured but unusable.
  */
@@ -594,19 +590,19 @@ async function readServiceAccount(
     inline === undefined
       ? 'GOOGLE_APPLICATION_CREDENTIALS'
       : 'GOOGLE_SERVICE_ACCOUNT_KEY';
-  const raw =
-    inline !== undefined
-      ? inline.startsWith('{')
-        ? inline
-        : fromBase64(inline)
-      : path !== undefined
-        ? await readFile(path, 'utf8').catch(() => {
-            throw new SemanticReleaseError(
-              `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
-              'ESERVICEACCOUNT',
-            );
-          })
-        : undefined;
+  let raw: string | undefined;
+  if (inline !== undefined) {
+    raw = inline.startsWith('{') ? inline : fromBase64(inline);
+  } else if (path === undefined) {
+    // Neither variable is set, so there is no file or inline key to read.
+  } else {
+    raw = await readFile(path, 'utf8').catch(() => {
+      throw new SemanticReleaseError(
+        `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
+        'ESERVICEACCOUNT',
+      );
+    });
+  }
   if (raw === undefined) {
     return undefined;
   }
@@ -646,8 +642,7 @@ async function readServiceAccount(
  * `google-github-actions/auth` with workload identity federation), the OAuth
  * client triple the original plugin used (`GOOGLE_CLIENT_ID`,
  * `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`), then a service account key.
- *
- * @param env Environment variables, normally `context.env`.
+ * @param env - Environment variables, normally `context.env`.
  * @returns The credentials to authenticate with.
  * @throws An aggregate error naming everything that is missing.
  */
@@ -688,6 +683,7 @@ export async function resolveCredentials(env: Env): Promise<Credentials> {
               code,
             ),
         ),
+      'Chrome Web Store credentials are incomplete.',
     );
   }
   throw new SemanticReleaseError(
@@ -699,9 +695,8 @@ export async function resolveCredentials(env: Env): Promise<Credentials> {
 /**
  * Describe a failed token exchange without echoing any secret. Google answers
  * with `error` and `error_description`; only those are used.
- *
- * @param status HTTP status of the token endpoint.
- * @param body Decoded response body.
+ * @param status - HTTP status of the token endpoint.
+ * @param body - Decoded response body.
  * @param credentials The credentials that were exchanged.
  * @returns An error with guidance for the common causes.
  */
@@ -713,7 +708,8 @@ function tokenError(
   const fields: Readonly<Record<string, unknown>> = isRecord(body) ? body : {};
   const error = stringAt(fields, 'error');
   const description = stringAt(fields, 'error_description');
-  const reason = `${error ?? status}${description ? `: ${description}` : ''}`;
+  const detail = description ? `: ${description}` : '';
+  const reason = `${error ?? status}${detail}`;
   if (error === 'invalid_grant' && credentials.kind === 'oauth') {
     return new SemanticReleaseError(
       `Google rejected GOOGLE_REFRESH_TOKEN (${reason}). The token was revoked or has expired. Refresh tokens issued while the OAuth consent screen is in "Testing" mode expire after 7 days, and tokens also expire after six months without use or when the Google account password changes. Set the consent screen to "In production" and generate a new refresh token, or avoid refresh tokens entirely with workload identity federation (see the README).`,
@@ -734,8 +730,7 @@ function tokenError(
 
 /**
  * Build the signed assertion Google exchanges for a service account token.
- *
- * @param account Service account details.
+ * @param account - Service account details.
  * @returns A compact RS256 JWT.
  */
 function signAssertion(
@@ -758,9 +753,8 @@ function signAssertion(
  * Turn credentials into a bearer token for the Chrome Web Store API. An access
  * token is returned as is; the other kinds are exchanged with Google. Nothing
  * here is ever logged.
- *
- * @param credentials Credentials from `resolveCredentials`.
- * @param agent The connections to use; tests pass a mock. Defaults to new ones.
+ * @param credentials - Credentials from `resolveCredentials`.
+ * @param agent - The connections to use; tests pass a mock. Defaults to new ones.
  * @returns A short lived OAuth access token.
  * @throws If Google refuses the exchange.
  */
@@ -800,8 +794,8 @@ export async function getAccessToken(
       agent,
       retries: 2,
       retryPost: true,
-      attemptTimeoutMs: 60000,
-      deadlineMs: 180000,
+      attemptTimeoutMs: 60_000,
+      deadlineMs: 180_000,
     },
   ).catch((error: unknown) => {
     throw new SemanticReleaseError(
@@ -894,9 +888,8 @@ export interface RollbackRequest {
 
 /**
  * Read a field that must be one of a fixed list of strings.
- *
- * @param values The allowed values.
- * @param record The object to read from.
+ * @param values - The allowed values.
+ * @param record - The object to read from.
  * @param key Property name.
  * @returns The value when it is allowed, otherwise undefined.
  */
@@ -911,8 +904,7 @@ function enumAt<const T extends readonly string[]>(
 
 /**
  * Read an upload response, keeping only the fields the plugin understands.
- *
- * @param body Decoded response body.
+ * @param body - Decoded response body.
  * @returns The typed response; unknown or malformed fields are undefined.
  */
 function parseUpload(body: unknown): UploadResponse {
@@ -926,8 +918,7 @@ function parseUpload(body: unknown): UploadResponse {
 
 /**
  * Read the status of one item revision.
- *
- * @param value Decoded property of the status response.
+ * @param value - Decoded property of the status response.
  * @returns The typed revision status, or undefined when absent.
  */
 function parseRevision(value: unknown): ItemRevisionStatus | undefined {
@@ -953,8 +944,7 @@ function parseRevision(value: unknown): ItemRevisionStatus | undefined {
 
 /**
  * Read an item status response.
- *
- * @param body Decoded response body.
+ * @param body - Decoded response body.
  * @returns The typed status; unknown or malformed fields are undefined.
  */
 function parseStatus(body: unknown): StatusResponse {
@@ -974,8 +964,7 @@ function parseStatus(body: unknown): StatusResponse {
 
 /**
  * Read a publish response.
- *
- * @param body Decoded response body.
+ * @param body - Decoded response body.
  * @returns The typed response; unknown or malformed fields are undefined.
  */
 function parsePublish(body: unknown): PublishResponse {
@@ -1001,7 +990,7 @@ function parsePublish(body: unknown): PublishResponse {
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 
-const DEFAULT_POLL_TIMEOUT_MS = 300000;
+const DEFAULT_POLL_TIMEOUT_MS = 300_000;
 
 export interface ClientOptions {
   readonly publisherId: string;
@@ -1061,9 +1050,8 @@ const ACTION_HINTS: Readonly<Partial<Record<Action, string>>> = {
  * Turn an error response into an error that says what failed and what to
  * check. Only the fields of Google's error envelope are used, never request
  * headers or bodies, so credentials cannot leak into a message.
- *
- * @param action What was being attempted, for example `upload`.
- * @param result The failed response.
+ * @param action - What was being attempted, for example `upload`.
+ * @param result - The failed response.
  * @returns An error to throw.
  */
 function failure(action: Action, result: HttpResult): SemanticReleaseError {
@@ -1094,7 +1082,7 @@ function failure(action: Action, result: HttpResult): SemanticReleaseError {
   return new SemanticReleaseError(
     `Chrome Web Store ${action} failed with HTTP ${result.status}${
       status ? ` ${status}` : ''
-    }: ${text}${reasons.length ? ` (${reasons.join(', ')})` : ''}. ${hint}${
+    }: ${text}${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}. ${hint}${
       result.status === 400 || result.status === 403
         ? ` ${ACTION_HINTS[action] ?? ''}`.trimEnd()
         : ''
@@ -1116,8 +1104,7 @@ export class WebStoreClient {
   /**
    * Exchange credentials for an access token and build a client with the
    * default polling settings unless overridden.
-   *
-   * @param options Item, credentials and optional polling and logging settings.
+   * @param options - Item, credentials and optional polling and logging settings.
    * @returns A client holding a fresh access token.
    */
   static async connect(options: {
@@ -1155,8 +1142,8 @@ export class WebStoreClient {
   ): Promise<T> {
     const result = await request(url, init, {
       agent: this.options.agent,
-      attemptTimeoutMs: 60000,
-      deadlineMs: 60000,
+      attemptTimeoutMs: 60_000,
+      deadlineMs: 60_000,
       ...options,
     }).catch((error: unknown) => {
       throw new SemanticReleaseError(
@@ -1173,7 +1160,6 @@ export class WebStoreClient {
   /**
    * Fetch the status of the item (`items.fetchStatus`). Also the cheapest
    * authenticated call, so it doubles as the credentials check.
-   *
    * @returns The decoded status.
    */
   async fetchStatus(): Promise<StatusResponse> {
@@ -1182,7 +1168,7 @@ export class WebStoreClient {
       `${API}/v2/${this.name}:fetchStatus`,
       { method: 'GET', headers: this.headers() },
       parseStatus,
-      { retries: 3, attemptTimeoutMs: 60000, deadlineMs: 240000 },
+      { retries: 3, attemptTimeoutMs: 60_000, deadlineMs: 240_000 },
     );
   }
 
@@ -1190,8 +1176,7 @@ export class WebStoreClient {
    * Upload a package (`media.upload`) and wait until it has been processed.
    * Large packages are processed asynchronously, in which case the status is
    * polled until it settles or the timeout passes.
-   *
-   * @param zip The zip file contents.
+   * @param zip - The zip file contents.
    * @returns The successful upload response.
    * @throws If the upload fails, is not found, or does not finish in time.
    */
@@ -1208,7 +1193,7 @@ export class WebStoreClient {
         body: zip,
       },
       parseUpload,
-      { attemptTimeoutMs: 600000, deadlineMs: 600000 },
+      { attemptTimeoutMs: 600_000, deadlineMs: 600_000 },
     );
     if (response.uploadState === 'SUCCEEDED') {
       return response;
@@ -1234,7 +1219,7 @@ export class WebStoreClient {
     const deadline = Date.now() + this.options.pollTimeoutMs;
     const poll = async (): Promise<void> => {
       await sleep(this.options.pollIntervalMs);
-      const state = (await this.fetchStatus()).lastAsyncUploadState;
+      const { lastAsyncUploadState: state } = await this.fetchStatus();
       if (state === 'SUCCEEDED') {
         return;
       }
@@ -1250,15 +1235,14 @@ export class WebStoreClient {
           'EUPLOADTIMEOUT',
         );
       }
-      return poll();
+      await poll();
     };
-    return poll();
+    await poll();
   }
 
   /**
    * Submit the uploaded package for publishing (`items.publish`).
-   *
-   * @param body Publish options.
+   * @param body - Publish options.
    * @returns The submission state and any warnings.
    */
   async publish(body: PublishRequest): Promise<PublishResponse> {
@@ -1277,14 +1261,11 @@ export class WebStoreClient {
   /**
    * Whether an earlier submission is still waiting for review, which can make
    * the store refuse a new upload or submission.
-   *
    * @returns True when the item's submitted revision is `PENDING_REVIEW`.
    */
   async hasPendingSubmission(): Promise<boolean> {
-    return (
-      (await this.fetchStatus()).submittedItemRevisionStatus?.state ===
-      'PENDING_REVIEW'
-    );
+    const { submittedItemRevisionStatus } = await this.fetchStatus();
+    return submittedItemRevisionStatus?.state === 'PENDING_REVIEW';
   }
 
   /**
@@ -1293,9 +1274,8 @@ export class WebStoreClient {
    * `failOnWarnings` is set, and so does a state other than pending review,
    * staged or published. Both checks happen after the store has accepted the
    * request, so a failure here can leave a submission in place.
-   *
-   * @param body Publish options.
-   * @param policy Which warnings are ignored and whether others are fatal.
+   * @param body - Publish options.
+   * @param policy - Which warnings are ignored and whether others are fatal.
    * @returns The state of the submission.
    * @throws With `EPUBLISHSTATE` for an unacceptable state, or one error per
    * blocking warning.
@@ -1326,6 +1306,7 @@ export class WebStoreClient {
               warning.reason ?? 'EWARNING',
             ),
         ),
+        'The Chrome Web Store reported warnings that block this release.',
       );
     }
     if (!isOneOf(ACCEPTED_STATES, result.state)) {
@@ -1367,8 +1348,7 @@ export class WebStoreClient {
    * (`items.setPublishedDeployPercentage`) without a new review. The store
    * requires the value to be larger than the current target and only allows
    * it for items with over 10,000 seven-day active users.
-   *
-   * @param deployPercentage Whole number between 0 and 100.
+   * @param deployPercentage - Whole number between 0 and 100.
    */
   async setPublishedDeployPercentage(deployPercentage: number): Promise<void> {
     await this.postJson(
@@ -1382,8 +1362,7 @@ export class WebStoreClient {
 
   /**
    * Roll the published package back to an earlier one (`items.rollback`).
-   *
-   * @param body Rollback request.
+   * @param body - Rollback request.
    */
   async rollback(body: RollbackRequest): Promise<void> {
     await this.postJson('rollback', 'rollback', body);
@@ -1395,6 +1374,7 @@ export interface ConnectionOptions {
   readonly publisherId: string;
   /** The 32 letter item ID. */
   readonly extensionId: string;
+
   /**
    * Environment to read credentials from, with the same variables the plugin
    * uses (`CHROME_ACCESS_TOKEN`, the `GOOGLE_*` OAuth triple or a service
@@ -1407,8 +1387,7 @@ export interface ConnectionOptions {
 
 /**
  * Authenticate and build a client.
- *
- * @param options Item and credentials source.
+ * @param options - Item and credentials source.
  * @returns A client with a fresh access token.
  */
 async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
@@ -1422,33 +1401,32 @@ async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
 
 /**
  * Fetch the status of an item.
- *
- * @param options Item and credentials source.
+ * @param options - Item and credentials source.
  * @returns The store's status for the item.
  */
 export async function fetchStatus(
   options: ConnectionOptions,
 ): Promise<StatusResponse> {
-  return (await connect(options)).fetchStatus();
+  const client = await connect(options);
+  return client.fetchStatus();
 }
 
 /**
  * Cancel the item's active submission, for example one waiting for review.
- *
- * @param options Item and credentials source.
+ * @param options - Item and credentials source.
  */
 export async function cancelSubmission(
   options: ConnectionOptions,
 ): Promise<void> {
-  await (await connect(options)).cancelSubmission();
+  const client = await connect(options);
+  await client.cancelSubmission();
 }
 
 /**
  * Raise the rollout of the published revision without a new review. The
  * value must be larger than the current target, and the store only allows this
  * for items with over 10,000 seven-day active users.
- *
- * @param options Item and credentials source, and the new percentage (a whole
+ * @param options - Item and credentials source, and the new percentage (a whole
  * number between 0 and 100).
  * @throws With code `EINVALIDDEPLOYPERCENTAGE` for an invalid percentage.
  */
@@ -1462,15 +1440,15 @@ export async function setPublishedDeployPercentage(
       'EINVALIDDEPLOYPERCENTAGE',
     );
   }
-  await (await connect(options)).setPublishedDeployPercentage(deployPercentage);
+  const client = await connect(options);
+  await client.setPublishedDeployPercentage(deployPercentage);
 }
 
 /**
  * Roll the published package back to a previously published one and publish
  * it to all users. This is never done by the plugin itself: call it on
  * purpose. Use `validateOnly` for a dry run.
- *
- * @param options Item and credentials source, plus `rollbackReason` and
+ * @param options - Item and credentials source, plus `rollbackReason` and
  * `newVersion` (both required; the version must be higher than the currently
  * published one), and optionally `targetCrxVersion` and `validateOnly`.
  * @throws With code `EINVALIDROLLBACK` when a required field is missing.
@@ -1486,9 +1464,8 @@ export async function rollback(
       'EINVALIDROLLBACK',
     );
   }
-  await (
-    await connect(options)
-  ).rollback({
+  const client = await connect(options);
+  await client.rollback({
     rollbackReason,
     newVersion,
     ...(targetCrxVersion === undefined ? {} : { targetCrxVersion }),
