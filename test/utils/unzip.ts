@@ -1,6 +1,25 @@
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- experimental API used on purpose, crc32 is needed to verify members
-import { crc32 } from 'node:zlib';
 import { inflateRawAsync } from './zlib.js';
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) {
+    c = c & 1 ? 0xed_b8_83_20 ^ (c >>> 1) : c >>> 1;
+  }
+  return c >>> 0;
+});
+
+/**
+ * Compute the CRC-32 checksum of the given bytes.
+ * @param data - Bytes to checksum.
+ * @returns The unsigned 32-bit checksum.
+ */
+export function crc32(data: Uint8Array): number {
+  let crc = 0xff_ff_ff_ff;
+  for (const byte of data) {
+    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  }
+  return (crc ^ 0xff_ff_ff_ff) >>> 0;
+}
 
 /**
  * Read a zip file the way an independent reader would: locate the end of

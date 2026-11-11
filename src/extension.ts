@@ -5,12 +5,19 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { type Stats } from 'node:fs';
 import nodePath from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
-import { zipSync } from 'fflate';
+import { zip, type AsyncZippable, type ZipOptions } from 'fflate';
+import { promisify } from 'node:util';
 import SemanticReleaseError from '@semantic-release/error';
 import { messageOf } from './utils/error.js';
 import { isRecord } from './utils/object.js';
 import { toPosixPath } from './utils/path.js';
 import { toManifestVersion } from './version.js';
+
+type ZipWithOptions = (
+  data: AsyncZippable,
+  opts: ZipOptions,
+  cb: (err: Error | null, data: Uint8Array) => void,
+) => void;
 
 // Local midnight, because the zip format stores local time: the same bytes come out in every timezone.
 const ZIP_EPOCH = new Date(1980, 0, 1);
@@ -204,9 +211,10 @@ export class Extension {
       ),
     );
     await mkdir(nodePath.dirname(target), { recursive: true });
-    // sync is fine: the archive is compressed in memory from files already read.
-    // eslint-disable-next-line n/no-sync -- sync is fine, compression runs on in-memory bytes
-    const archive = zipSync(files, { level: 9, mtime: ZIP_EPOCH.getTime() });
+    const archive = await promisify(zip as ZipWithOptions)(files, {
+      level: 9,
+      mtime: ZIP_EPOCH.getTime(),
+    });
     await writeFile(target, archive);
     return paths.length;
   }
