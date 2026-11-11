@@ -7,6 +7,7 @@ import {
 // noinspection ES6PreferShortImport
 import { signJwt } from '../../src/utils/jwt.js';
 
+// eslint-disable-next-line n/no-sync -- test helper, sync is fine in a script or bootstrap because the key pair is built once at module load
 const { privateKey, publicKey } = generateKeyPairSync('rsa', {
   modulusLength: 2048,
   privateKeyEncoding: { type: 'pkcs8', format: 'pem' },

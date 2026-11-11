@@ -1,11 +1,14 @@
 import { describe, expect, it } from '@jest/globals';
 import { readFile, symlink } from 'node:fs/promises';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import nodePath from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 // noinspection ES6PreferShortImport
 import { Extension } from '../src/extension.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
+
+const { join } = nodePath;
 
 const noop = (): void => {};
 
@@ -73,6 +76,7 @@ describe('Extension.setVersion', () => {
     expect(
       JSON.parse(await versioned('{"version": "1.0.0"}', '1.1.0-beta.3')),
     ).toEqual({
+      // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture
       version: '1.1.0.3',
       version_name: '1.1.0-beta.3',
     });
@@ -172,11 +176,9 @@ describe('Extension.zip', () => {
       const count = await Extension.at(join(dir, 'dist'), []).zip(out);
       const entries = unzip(await readFile(out));
       expect(count).toBe(3);
-      expect(Object.keys(entries).sort()).toEqual([
-        'img/ü.png',
-        'js/app.js',
-        'manifest.json',
-      ]);
+      expect(
+        Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(['img/ü.png', 'js/app.js', 'manifest.json']);
       expect(entries['js/app.js'].toString()).toBe(files['dist/js/app.js']);
       expect([...entries['img/ü.png']]).toEqual([0, 1, 2, 3]);
     });
@@ -188,9 +190,14 @@ describe('Extension.zip', () => {
       async (dir) => {
         const out = join(dir, 'ext.zip');
         await Extension.at(join(dir, 'dist'), []).zip(out);
-        const check = spawnSync('unzip', ['-tq', out]);
-        if (!check.error) {
-          expect(check.status).toBe(0);
+        // A spawn failure (no unzip binary) is a string code and skips the check.
+        const status = await promisify(execFile)('/usr/bin/unzip', ['-tq', out])
+          .then(() => 0)
+          .catch((error: { code?: unknown }) =>
+            typeof error.code === 'string' ? undefined : error.code,
+          );
+        if (status !== undefined) {
+          expect(status).toBe(0);
         }
       },
     );
@@ -204,10 +211,11 @@ describe('Extension.zip', () => {
         const extension = Extension.at(join(dir, 'dist'), []);
         await extension.zip(out);
         await extension.zip(out);
-        expect(Object.keys(unzip(await readFile(out))).sort()).toEqual([
-          'a.js',
-          'manifest.json',
-        ]);
+        expect(
+          Object.keys(unzip(await readFile(out))).toSorted((a, b) =>
+            a.localeCompare(b),
+          ),
+        ).toEqual(['a.js', 'manifest.json']);
       },
     );
   });
@@ -233,11 +241,9 @@ describe('Extension.zip', () => {
         const extension = Extension.at(join(dir, 'dist'), []);
         await extension.zip(join(dir, '1.zip'));
         await extension.zip(join(dir, '2.zip'));
-        expect(
-          (await readFile(join(dir, '1.zip'))).equals(
-            await readFile(join(dir, '2.zip')),
-          ),
-        ).toBe(true);
+        const first = await readFile(join(dir, '1.zip'));
+        const second = await readFile(join(dir, '2.zip'));
+        expect(first.equals(second)).toBe(true);
       },
     );
   });
@@ -253,7 +259,9 @@ describe('Extension.zip', () => {
       const out = join(dir, 'a.zip');
       expect(await Extension.at(join(dir, 'dist'), []).zip(out)).toBe(101);
       const entries = unzip(await readFile(out));
-      expect(Object.keys(entries)).toEqual(Object.keys(entries).toSorted());
+      expect(Object.keys(entries)).toEqual(
+        Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+      );
       expect(entries['f042.txt'].toString()).toBe('file 42');
     });
   });
@@ -266,10 +274,9 @@ describe('Extension.zip', () => {
         const out = join(dir, 'asset.zip');
         await Extension.at(join(dir, 'dist'), []).zip(out);
         const entries = unzip(await readFile(out));
-        expect(Object.keys(entries).sort()).toEqual([
-          'link.txt',
-          'manifest.json',
-        ]);
+        expect(
+          Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+        ).toEqual(['link.txt', 'manifest.json']);
         expect(entries['link.txt'].toString()).toBe('linked');
       },
     );

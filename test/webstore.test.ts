@@ -16,10 +16,15 @@ import {
   createVerify,
   generateKeyPairSync,
 } from 'node:crypto';
-import { join } from 'node:path';
+import path from 'node:path';
 import { withTmp } from './utils/tmpdir.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
-import * as client from '../src/webstore.js';
+import {
+  cancelSubmission,
+  fetchStatus,
+  rollback,
+  setPublishedDeployPercentage,
+} from '../src/webstore.js';
 
 afterEach(() => jest.restoreAllMocks());
 
@@ -136,9 +141,11 @@ describe('WebStoreClient.upload', () => {
 describe('WebStoreClient errors', () => {
   const failing = async (status: number, json: unknown) => {
     mockHttp({ [UPLOAD]: { status, json } });
-    return make()
-      .upload(Buffer.from('z'))
-      .catch((error: unknown) => error as Error & { code: string });
+    try {
+      return await make().upload(Buffer.from('z'));
+    } catch (error) {
+      return error as Error & { code: string };
+    }
   };
 
   it('explains a 400 with the Google message and a checklist (issues 7, 69)', async () => {
@@ -181,11 +188,11 @@ describe('WebStoreClient errors', () => {
 
   it('handles other statuses and non JSON bodies', async () => {
     mockHttp({ [UPLOAD]: { status: 500, text: 'Internal oops' } });
-    const error = await make()
+    const failure = await make()
       .upload(Buffer.from('z'))
-      .catch((error_: unknown) => error_ as Error & { code: string });
-    expect(error.code).toBe('EWEBSTOREHTTP');
-    expect(error.message).toContain('Internal oops');
+      .catch((error: unknown) => error as Error & { code: string });
+    expect(failure.code).toBe('EWEBSTOREHTTP');
+    expect(failure.message).toContain('Internal oops');
   });
 
   it('handles an error response without a message', async () => {
@@ -213,9 +220,9 @@ describe('WebStoreClient.fetchStatus', () => {
         json: { publishedItemRevisionStatus: { state: 'PUBLISHED' } },
       },
     });
-    expect(
-      (await make().fetchStatus()).publishedItemRevisionStatus?.state,
-    ).toBe('PUBLISHED');
+    expect(await make().fetchStatus()).toMatchObject({
+      publishedItemRevisionStatus: { state: 'PUBLISHED' },
+    });
   });
 
   it('retries transient server errors', async () => {
@@ -434,6 +441,7 @@ describe('auth', () => {
 
   const TOKEN = 'POST https://oauth2.googleapis.com/token';
 
+  // eslint-disable-next-line n/no-sync -- test helper, sync is fine in a script or bootstrap because the key pair is built once at module load
   const { privateKey, publicKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
@@ -474,11 +482,11 @@ describe('auth', () => {
     });
 
     it('reports each missing OAuth variable with the original codes', async () => {
-      const error = await resolveCredentials({ GOOGLE_CLIENT_ID: 'id' }).catch(
-        (error_: unknown) => error_ as AggregateError,
-      );
+      const failure = await resolveCredentials({
+        GOOGLE_CLIENT_ID: 'id',
+      }).catch((error: unknown) => error as AggregateError);
       expect(
-        (error as AggregateError).errors.map((e: { code: string }) => e.code),
+        (failure as AggregateError).errors.map((e: { code: string }) => e.code),
       ).toEqual(['EGOOGLECLIENTSECRET', 'EGOOGLEREFRESHTOKEN']);
     });
 
@@ -519,7 +527,7 @@ describe('auth', () => {
       await withTmp({ 'key.json': serviceAccountJson }, async (dir) => {
         expect(
           await resolveCredentials({
-            GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'key.json'),
+            GOOGLE_APPLICATION_CREDENTIALS: path.join(dir, 'key.json'),
           }),
         ).toMatchObject({ kind: 'serviceAccount' });
       });
@@ -547,7 +555,7 @@ describe('auth', () => {
         async (dir) => {
           await expect(
             resolveCredentials({
-              GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'wif.json'),
+              GOOGLE_APPLICATION_CREDENTIALS: path.join(dir, 'wif.json'),
             }),
           ).rejects.toMatchObject({
             code: 'ESERVICEACCOUNT',
@@ -618,16 +626,16 @@ describe('auth', () => {
           },
         },
       });
-      const error = await tokenFor({
+      const failure = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'secret',
         refreshToken: 'SUPER-SECRET-REFRESH',
-      }).catch((error_: unknown) => error_ as Error & { code: string });
-      expect(error.code).toBe('EREFRESHTOKEN');
-      expect(error.message).toContain('7 days');
-      expect(error.message).toContain('workload identity federation');
-      expect(error.message).not.toContain('SUPER-SECRET-REFRESH');
+      }).catch((error: unknown) => error as Error & { code: string });
+      expect(failure.code).toBe('EREFRESHTOKEN');
+      expect(failure.message).toContain('7 days');
+      expect(failure.message).toContain('workload identity federation');
+      expect(failure.message).not.toContain('SUPER-SECRET-REFRESH');
     });
 
     it('reports a rejected OAuth client', async () => {
@@ -667,14 +675,14 @@ describe('auth', () => {
 
     it('reports a network failure without leaking the request', async () => {
       failHttp('https://oauth2.googleapis.com', new Error('offline'));
-      const error = await tokenFor({
+      const failure = await tokenFor({
         kind: 'oauth',
         clientId: 'id',
         clientSecret: 'TOPSECRET',
         refreshToken: 'REFRESH',
-      }).catch((error_: unknown) => error_ as Error & { code: string });
-      expect(error.code).toBe('EAUTH');
-      expect(error.message).not.toMatch(/TOPSECRET|REFRESH/);
+      }).catch((error: unknown) => error as Error & { code: string });
+      expect(failure.code).toBe('EAUTH');
+      expect(failure.message).not.toMatch(/TOPSECRET|REFRESH/);
     });
 
     it('signs a service account assertion Google can verify', async () => {
@@ -743,7 +751,8 @@ describe('request', () => {
 
   it('returns an undefined body for an empty response', async () => {
     mockHttp({ [GET]: {} });
-    expect((await request(URL_A, {}, via())).body).toBeUndefined();
+    const response = await request(URL_A, {}, via());
+    expect(response.body).toBeUndefined();
   });
 
   it('sends the default headers once, whatever the case of an override', async () => {
@@ -810,7 +819,8 @@ describe('request', () => {
 
   it('does not retry unless asked to', async () => {
     const calls = mockHttp({ [GET]: { status: 503 } });
-    expect((await request(URL_A, {}, via())).status).toBe(503);
+    const response = await request(URL_A, {}, via());
+    expect(response.status).toBe(503);
     expect(calls).toHaveLength(1);
   });
 
@@ -825,12 +835,12 @@ describe('request', () => {
       'https://x.test',
       Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
     );
-    const error = await request(
+    const failure = await request(
       'https://x.test/a?token=secret',
       { headers: { Authorization: 'Bearer secret' } },
       via({ retries: 1 }),
-    ).catch((error_: unknown) => error_);
-    expect(String(error)).toBe(
+    ).catch((error: unknown) => error);
+    expect(String(failure)).toBe(
       'Error: Network error calling x.test: socket hang up',
     );
     expect(attempts()).toBe(2);
@@ -861,15 +871,16 @@ describe('request', () => {
 
   it('refuses a malformed proxy setting without printing it', async () => {
     const saved = { ...process.env };
+    // eslint-disable-next-line sonarjs/no-clear-text-protocols -- test fixture, a malformed proxy URL that is never contacted
     process.env.HTTPS_PROXY = 'http://user:PW-SECRET@bad host:3128';
     try {
-      const error = await request(URL_A, {}).catch((error_: unknown) => error_);
-      expect(error).toMatchObject({ code: 'EPROXY' });
+      const failure = await request(URL_A, {}).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'EPROXY' });
       const shown = [
-        String(error),
-        inspect(error, { depth: 10, showHidden: true }),
-        JSON.stringify(error, Object.getOwnPropertyNames(error)),
-        JSON.stringify(Object.entries(error as object)),
+        String(failure),
+        inspect(failure, { depth: 10, showHidden: true }),
+        JSON.stringify(failure, Object.getOwnPropertyNames(failure)),
+        JSON.stringify(Object.entries(failure as object)),
       ].join('\n');
       expect(shown).not.toContain('PW-SECRET');
       expect(shown).toContain('HTTPS_PROXY');
@@ -1074,12 +1085,12 @@ describe('request over a real socket', () => {
   it('names the code when a closed local port refuses the connection, without leaking the URL', async () => {
     const server = await listen(() => undefined);
     await server.close();
-    const error = await request(
+    const failure = await request(
       `http://localhost:${server.port}/a?token=SECRET`,
       { headers: { Authorization: 'Bearer SECRET' } },
-    ).catch((error_: unknown) => error_);
-    expect(String(error)).toContain('ECONNREFUSED');
-    expect(String(error)).not.toContain('SECRET');
+    ).catch((error: unknown) => error);
+    expect(String(failure)).toContain('ECONNREFUSED');
+    expect(String(failure)).not.toContain('SECRET');
   });
 
   it('goes through the proxy named by the environment', async () => {
@@ -1090,6 +1101,7 @@ describe('request over a real socket', () => {
     process.env.NO_PROXY = '';
     delete process.env.http_proxy;
     delete process.env.no_proxy;
+    // eslint-disable-next-line sonarjs/no-clear-text-protocols, unicorn/prefer-https -- test fixture, a reserved .invalid host the test proxy answers over plain http
     const result = await request('http://something.invalid/a', {});
     expect(result.body).toEqual({ direct: 1 });
     expect(proxy.tunnelled).toEqual(['something.invalid:80']);
@@ -1120,6 +1132,7 @@ describe('request over a real socket', () => {
       const started = Date.now();
       await expect(
         request(
+          // eslint-disable-next-line sonarjs/no-clear-text-protocols, unicorn/prefer-https -- test fixture, a reserved .invalid host that is never reached
           'http://something.invalid/a',
           {},
           { retries: 1, deadlineMs: 1500, minTimeout: 1 },
@@ -1198,6 +1211,7 @@ describe('request over a real socket', () => {
       agent
         .get('https://x.test')
         .intercept({ path: '/a', method: 'GET' })
+        // eslint-disable-next-line unicorn/prefer-https -- test fixture, a redirect target the mock agent never contacts
         .reply(301, '', { headers: { location: 'http://x.test/b?access=1' } });
 
       const result = await request(
@@ -1208,6 +1222,7 @@ describe('request over a real socket', () => {
 
       expect(result).toMatchObject({
         status: 301,
+        // eslint-disable-next-line unicorn/prefer-https -- test fixture, a redirect target the mock agent never contacts
         location: 'http://x.test/b',
       });
     });
@@ -1271,10 +1286,10 @@ describe('client', () => {
     it('exports the documented functions', () => {
       expect(
         [
-          client.cancelSubmission,
-          client.fetchStatus,
-          client.rollback,
-          client.setPublishedDeployPercentage,
+          cancelSubmission,
+          fetchStatus,
+          rollback,
+          setPublishedDeployPercentage,
         ].every((fn) => typeof fn === 'function'),
       ).toBe(true);
     });
@@ -1283,7 +1298,7 @@ describe('client', () => {
   describe('rollback', () => {
     it('sends the request schema fields with the bearer token', async () => {
       const calls = mockHttp({ [ROLLBACK]: { json: {} } });
-      await client.rollback({
+      await rollback({
         ...base,
         rollbackReason: 'crash on start',
         newVersion: '1.2.1',
@@ -1302,7 +1317,7 @@ describe('client', () => {
 
     it('leaves out the optional fields that were not given', async () => {
       const calls = mockHttp({ [ROLLBACK]: { json: {} } });
-      await client.rollback({
+      await rollback({
         ...base,
         rollbackReason: 'bad',
         newVersion: '2.0.1',
@@ -1316,10 +1331,10 @@ describe('client', () => {
     it('requires a reason and a new version before any request', async () => {
       const calls = mockHttp({});
       await expect(
-        client.rollback({ ...base, rollbackReason: ' ', newVersion: '1' }),
+        rollback({ ...base, rollbackReason: ' ', newVersion: '1' }),
       ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
       await expect(
-        client.rollback({ ...base, rollbackReason: 'x', newVersion: '' }),
+        rollback({ ...base, rollbackReason: 'x', newVersion: '' }),
       ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
       expect(calls).toHaveLength(0);
     });
@@ -1332,7 +1347,7 @@ describe('client', () => {
         },
       });
       await expect(
-        client.rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.0' }),
+        rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.0' }),
       ).rejects.toMatchObject({
         code: 'EWEBSTOREBADREQUEST',
         message: expect.stringContaining('newVersion must be higher'),
@@ -1342,7 +1357,7 @@ describe('client', () => {
     it('fails with the credentials code when none are available', async () => {
       mockHttp({});
       await expect(
-        client.rollback({
+        rollback({
           ...base,
           env: {},
           rollbackReason: 'x',
@@ -1355,17 +1370,19 @@ describe('client', () => {
       mockHttp({
         [ROLLBACK]: { status: 401, json: { error: { message: 'bad' } } },
       });
-      const error = (await client
-        .rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.1' })
-        .catch((error_: unknown) => error_)) as Error;
-      expect(error.message).not.toContain('SECRET-TOKEN');
+      const failure = (await rollback({
+        ...base,
+        rollbackReason: 'x',
+        newVersion: '1.0.1',
+      }).catch((error: unknown) => error)) as Error;
+      expect(failure.message).not.toContain('SECRET-TOKEN');
     });
   });
 
   describe('cancelSubmission', () => {
     it('posts an empty body', async () => {
       const calls = mockHttp({ [CANCEL]: { json: {} } });
-      await client.cancelSubmission(base);
+      await cancelSubmission(base);
       expect(calls[0].body).toEqual({});
     });
 
@@ -1373,7 +1390,7 @@ describe('client', () => {
       mockHttp({
         [CANCEL]: { status: 404, json: { error: { message: 'gone' } } },
       });
-      await expect(client.cancelSubmission(base)).rejects.toMatchObject({
+      await expect(cancelSubmission(base)).rejects.toMatchObject({
         code: 'EWEBSTORENOTFOUND',
       });
     });
@@ -1382,7 +1399,7 @@ describe('client', () => {
   describe('setPublishedDeployPercentage', () => {
     it('posts the percentage', async () => {
       const calls = mockHttp({ [PROMOTE]: { json: {} } });
-      await client.setPublishedDeployPercentage({
+      await setPublishedDeployPercentage({
         ...base,
         deployPercentage: 25,
       });
@@ -1393,7 +1410,7 @@ describe('client', () => {
       const calls = mockHttp({});
       for (const deployPercentage of [-1, 101, 1.5, Number.NaN]) {
         await expect(
-          client.setPublishedDeployPercentage({ ...base, deployPercentage }),
+          setPublishedDeployPercentage({ ...base, deployPercentage }),
         ).rejects.toMatchObject({
           code: 'EINVALIDDEPLOYPERCENTAGE',
         });
@@ -1405,7 +1422,7 @@ describe('client', () => {
   describe('fetchStatus', () => {
     it('returns the status', async () => {
       mockHttp({ [STATUS]: { json: { takenDown: false } } });
-      expect(await client.fetchStatus(base)).toEqual({ takenDown: false });
+      expect(await fetchStatus(base)).toEqual({ takenDown: false });
     });
   });
 });
@@ -1483,7 +1500,7 @@ describe('WebStoreClient response parsing', () => {
     const result = await make().publish({ publishType: 'DEFAULT_PUBLISH' });
     expect(result.warningInfo?.warnings).toEqual([
       { reason: 'A', description: 'a' },
-      { reason: undefined, description: undefined },
+      {},
     ]);
   });
 
@@ -1499,10 +1516,10 @@ describe('WebStoreClient response parsing', () => {
         },
       },
     });
-    const error = await make()
+    const failure = await make()
       .upload(Buffer.from('z'))
-      .catch((error_: unknown) => error_ as Error);
-    expect((error as Error).message).toContain('(R1)');
+      .catch((error: unknown) => error as Error);
+    expect((failure as Error).message).toContain('(R1)');
   });
 });
 

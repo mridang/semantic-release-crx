@@ -6,7 +6,6 @@ describe('toManifestVersion', () => {
   it('keeps a stable version as is and sets no version_name', () => {
     expect(toManifestVersion('1.2.3')).toEqual({
       version: '1.2.3',
-      versionName: undefined,
       prerelease: false,
     });
   });
@@ -17,6 +16,7 @@ describe('toManifestVersion', () => {
 
   it('turns a pre-release into four parts and keeps the full semver as version_name (issue 111)', () => {
     expect(toManifestVersion('1.0.0-develop.1')).toEqual({
+      // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture, a manifest version string and not an address
       version: '1.0.0.1',
       versionName: '1.0.0-develop.1',
       prerelease: true,
@@ -26,7 +26,9 @@ describe('toManifestVersion', () => {
   it('uses the last numeric identifier so successive pre-releases increase (issue 111)', () => {
     const first = toManifestVersion('2.0.0-beta.9').version;
     const second = toManifestVersion('2.0.0-beta.10').version;
+    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture, a manifest version string and not an address
     expect(first).toBe('2.0.0.9');
+    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture, a manifest version string and not an address
     expect(second).toBe('2.0.0.10');
   });
 

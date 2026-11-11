@@ -68,17 +68,19 @@ export function mockAgent(): MockAgent {
  * @returns The headers keyed by their original names.
  */
 function headerRecord(headers: unknown): Record<string, string> {
-  return Array.isArray(headers)
-    ? Object.fromEntries(
-        headers.flatMap((_, i) =>
-          i % 2 === 0 ? [[String(headers[i]), String(headers[i + 1])]] : [],
-        ),
-      )
-    : isRecord(headers)
-      ? Object.fromEntries(
-          Object.entries(headers).map(([k, v]) => [k, String(v)]),
-        )
-      : {};
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(
+      headers.flatMap((_, i) =>
+        i % 2 === 0 ? [[String(headers[i]), String(headers[i + 1])]] : [],
+      ),
+    );
+  }
+  if (isRecord(headers)) {
+    return Object.fromEntries(
+      Object.entries(headers).map(([k, v]) => [k, String(v)]),
+    );
+  }
+  return {};
 }
 
 /**
@@ -91,13 +93,12 @@ function decodeBody(body: unknown, headers: Record<string, string>): unknown {
   const type = Object.entries(headers).find(
     ([k]) => k.toLowerCase() === 'content-type',
   )?.[1];
-  return typeof body === 'string'
-    ? type?.includes('x-www-form-urlencoded')
+  if (typeof body === 'string') {
+    return type?.includes('x-www-form-urlencoded')
       ? Object.fromEntries(new URLSearchParams(body))
-      : (JSON.parse(body) as unknown)
-    : body instanceof Uint8Array
-      ? body
-      : undefined;
+      : (JSON.parse(body) as unknown);
+  }
+  return body instanceof Uint8Array ? body : undefined;
 }
 
 /**

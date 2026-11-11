@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import path from 'node:path';
 
 /**
  * Create a temporary directory populated with files, run a function in it and
@@ -13,12 +13,12 @@ export async function withTmp<T>(
   files: Record<string, string | Buffer>,
   fn: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), 'crx-test-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'crx-test-'));
   try {
     await Promise.all(
       Object.entries(files).map(async ([name, contents]) => {
-        await mkdir(dirname(join(dir, name)), { recursive: true });
-        await writeFile(join(dir, name), contents);
+        await mkdir(path.dirname(path.join(dir, name)), { recursive: true });
+        await writeFile(path.join(dir, name), contents);
       }),
     );
     return await fn(dir);

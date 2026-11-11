@@ -172,7 +172,7 @@ export function resolveExtensionId(
   if (isRecord(extensionId)) {
     const branch = context.branch?.name;
     const id =
-      branch !== undefined && Object.hasOwn(extensionId, branch)
+      typeof branch === 'string' && Object.hasOwn(extensionId, branch)
         ? extensionId[branch]
         : undefined;
     return id
@@ -219,6 +219,15 @@ export function resolvePublisherId(
 }
 
 /**
+ * Whether a value is a finite number above zero.
+ * @param value - Any value from the configuration.
+ * @returns True for a positive, finite number.
+ */
+function isPositiveNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
  * Validate the options that do not need the network.
  * @param config - Plugin configuration.
  * @param requireAsset - Whether `asset` is mandatory for this step.
@@ -228,10 +237,17 @@ export function validateConfig(
   config: CrxPluginConfig,
   requireAsset: boolean,
 ): readonly Error[] {
-  const target: unknown = config.target;
-  const prerelease: unknown = config.prerelease;
+  const {
+    asset,
+    target,
+    prerelease,
+  }: {
+    readonly asset?: unknown;
+    readonly target?: unknown;
+    readonly prerelease?: unknown;
+  } = config;
   return [
-    ...(requireAsset && !config.asset
+    ...(requireAsset && !asset
       ? [
           new SemanticReleaseError(
             "Option 'asset' was not included in the config. Check the README.md for config info.",
@@ -257,8 +273,7 @@ export function validateConfig(
       : []),
     ...(['pollIntervalMs', 'pollTimeoutMs'] as const).flatMap((name) => {
       const value: unknown = config[name];
-      return value !== undefined &&
-        !(typeof value === 'number' && Number.isFinite(value) && value > 0)
+      return value !== undefined && !isPositiveNumber(value)
         ? [
             new SemanticReleaseError(
               `Option '${name}' must be a positive number of milliseconds.`,

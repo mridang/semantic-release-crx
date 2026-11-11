@@ -117,6 +117,8 @@ const BODY_PHASE_CODE = 'UND_ERR_BODY_PHASE';
  * request is sent again instead.
  */
 class BodyPhaseError extends Error {
+  override name = 'BodyPhaseError';
+
   readonly code = BODY_PHASE_CODE;
 
   /**
@@ -337,12 +339,14 @@ function waitBeforeRetry(
   return Math.min(backoffMs, capMs);
 }
 
+type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'PUT' | 'DELETE' | 'POST';
+
 /**
  * What the caller of {@link request} can ask for.
  */
 export interface HttpRequest {
   /** The HTTP method. Defaults to `GET`. */
-  readonly method?: 'GET' | 'HEAD' | 'OPTIONS' | 'PUT' | 'DELETE' | 'POST';
+  readonly method?: HttpMethod;
   /** Extra headers, which replace the defaults of the same name in any case. */
   readonly headers?: Readonly<Record<string, string>>;
   /** A text or binary body, which can be sent again if the call is retried. */
@@ -415,6 +419,7 @@ export async function request(
     minTimeout = 500,
     retryPost = false,
     followRedirects = false,
+    agent,
   } = options;
   const target = new URL(url);
   const method = init.method ?? 'GET';
@@ -424,9 +429,8 @@ export async function request(
     ? [...IDEMPOTENT_METHODS, 'POST']
     : IDEMPOTENT_METHODS;
   const capMs = Math.min(MAX_BACKOFF_MS, Math.floor(deadlineMs / 4));
-  const own =
-    options.agent === undefined ? connections(attemptTimeoutMs) : undefined;
-  const base = options.agent ?? own;
+  const own = agent === undefined ? connections(attemptTimeoutMs) : undefined;
+  const base = agent ?? own;
   const deadline = AbortSignal.timeout(deadlineMs);
   const finished = new AbortController();
   const headers = Object.fromEntries(
@@ -589,7 +593,9 @@ async function readServiceAccount(
   let raw: string | undefined;
   if (inline !== undefined) {
     raw = inline.startsWith('{') ? inline : fromBase64(inline);
-  } else if (path !== undefined) {
+  } else if (path === undefined) {
+    // Neither variable is set, so there is no file or inline key to read.
+  } else {
     raw = await readFile(path, 'utf8').catch(() => {
       throw new SemanticReleaseError(
         `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
@@ -677,6 +683,7 @@ export async function resolveCredentials(env: Env): Promise<Credentials> {
               code,
             ),
         ),
+      'Chrome Web Store credentials are incomplete.',
     );
   }
   throw new SemanticReleaseError(
@@ -701,7 +708,8 @@ function tokenError(
   const fields: Readonly<Record<string, unknown>> = isRecord(body) ? body : {};
   const error = stringAt(fields, 'error');
   const description = stringAt(fields, 'error_description');
-  const reason = `${error ?? status}${description ? `: ${description}` : ''}`;
+  const detail = description ? `: ${description}` : '';
+  const reason = `${error ?? status}${detail}`;
   if (error === 'invalid_grant' && credentials.kind === 'oauth') {
     return new SemanticReleaseError(
       `Google rejected GOOGLE_REFRESH_TOKEN (${reason}). The token was revoked or has expired. Refresh tokens issued while the OAuth consent screen is in "Testing" mode expire after 7 days, and tokens also expire after six months without use or when the Google account password changes. Set the consent screen to "In production" and generate a new refresh token, or avoid refresh tokens entirely with workload identity federation (see the README).`,
@@ -1211,7 +1219,7 @@ export class WebStoreClient {
     const deadline = Date.now() + this.options.pollTimeoutMs;
     const poll = async (): Promise<void> => {
       await sleep(this.options.pollIntervalMs);
-      const state = (await this.fetchStatus()).lastAsyncUploadState;
+      const { lastAsyncUploadState: state } = await this.fetchStatus();
       if (state === 'SUCCEEDED') {
         return;
       }
@@ -1227,9 +1235,9 @@ export class WebStoreClient {
           'EUPLOADTIMEOUT',
         );
       }
-      return poll();
+      await poll();
     };
-    return poll();
+    await poll();
   }
 
   /**
@@ -1256,10 +1264,8 @@ export class WebStoreClient {
    * @returns True when the item's submitted revision is `PENDING_REVIEW`.
    */
   async hasPendingSubmission(): Promise<boolean> {
-    return (
-      (await this.fetchStatus()).submittedItemRevisionStatus?.state ===
-      'PENDING_REVIEW'
-    );
+    const { submittedItemRevisionStatus } = await this.fetchStatus();
+    return submittedItemRevisionStatus?.state === 'PENDING_REVIEW';
   }
 
   /**
@@ -1300,6 +1306,7 @@ export class WebStoreClient {
               warning.reason ?? 'EWARNING',
             ),
         ),
+        'The Chrome Web Store reported warnings that block this release.',
       );
     }
     if (!isOneOf(ACCEPTED_STATES, result.state)) {
@@ -1400,7 +1407,8 @@ async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
 export async function fetchStatus(
   options: ConnectionOptions,
 ): Promise<StatusResponse> {
-  return (await connect(options)).fetchStatus();
+  const client = await connect(options);
+  return client.fetchStatus();
 }
 
 /**
@@ -1410,7 +1418,8 @@ export async function fetchStatus(
 export async function cancelSubmission(
   options: ConnectionOptions,
 ): Promise<void> {
-  await (await connect(options)).cancelSubmission();
+  const client = await connect(options);
+  await client.cancelSubmission();
 }
 
 /**
@@ -1431,7 +1440,8 @@ export async function setPublishedDeployPercentage(
       'EINVALIDDEPLOYPERCENTAGE',
     );
   }
-  await (await connect(options)).setPublishedDeployPercentage(deployPercentage);
+  const client = await connect(options);
+  await client.setPublishedDeployPercentage(deployPercentage);
 }
 
 /**
@@ -1454,9 +1464,8 @@ export async function rollback(
       'EINVALIDROLLBACK',
     );
   }
-  await (
-    await connect(options)
-  ).rollback({
+  const client = await connect(options);
+  await client.rollback({
     rollbackReason,
     newVersion,
     ...(targetCrxVersion === undefined ? {} : { targetCrxVersion }),
