@@ -74,11 +74,11 @@ function headerRecord(headers: unknown): Record<string, string> {
           i % 2 === 0 ? [[String(headers[i]), String(headers[i + 1])]] : [],
         ),
       )
-    : (isRecord(headers)
+    : isRecord(headers)
       ? Object.fromEntries(
           Object.entries(headers).map(([k, v]) => [k, String(v)]),
         )
-      : {});
+      : {};
 }
 
 /**
@@ -92,12 +92,12 @@ function decodeBody(body: unknown, headers: Record<string, string>): unknown {
     ([k]) => k.toLowerCase() === 'content-type',
   )?.[1];
   return typeof body === 'string'
-    ? (type?.includes('x-www-form-urlencoded')
+    ? type?.includes('x-www-form-urlencoded')
       ? Object.fromEntries(new URLSearchParams(body))
-      : (JSON.parse(body) as unknown))
-    : (body instanceof Uint8Array
+      : (JSON.parse(body) as unknown)
+    : body instanceof Uint8Array
       ? body
-      : undefined);
+      : undefined;
 }
 
 /**

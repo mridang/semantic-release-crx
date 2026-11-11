@@ -1,3 +1,6 @@
+/**
+ * @file Describes thrown values and reads their codes, whatever their shape.
+ */
 import { isRecord, stringAt } from './object.js';
 
 /**
@@ -10,6 +13,9 @@ import { isRecord, stringAt } from './object.js';
  * raised by Node itself can come from another realm (a test sandbox, for one).
  * @param error - A caught value, which is not necessarily an `Error`.
  * @returns Its message, or its string form when it is not an `Error`.
+ * @example
+ * messageOf(new Error('boom')); // 'boom'
+ * messageOf('plain text'); // 'plain text'
  */
 export function messageOf(error: unknown): string {
   if (!isRecord(error) || typeof error.message !== 'string') {
@@ -30,6 +36,9 @@ export function messageOf(error: unknown): string {
  * or a Node system error (`ENOENT`).
  * @param error - A caught value.
  * @returns Its string `code`, or undefined when it has none.
+ * @example
+ * codeOf(Object.assign(new Error('missing'), { code: 'ENOENT' })); // 'ENOENT'
+ * codeOf(new Error('no code')); // undefined
  */
 export function codeOf(error: unknown): string | undefined {
   return isRecord(error) ? stringAt(error, 'code') : undefined;
