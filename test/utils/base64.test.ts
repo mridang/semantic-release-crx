@@ -4,7 +4,6 @@ import { fromBase64, toBase64Url } from '../../src/utils/base64.js';
 
 describe('toBase64Url', () => {
   it('uses the URL safe alphabet without padding', () => {
-    // eslint-disable-next-line unicorn/number-literal-case -- conflicts with Prettier formatting
     expect(toBase64Url(Buffer.from([0xfb, 0xff, 0xfe]))).toBe('-__-');
     expect(toBase64Url('a')).toBe('YQ');
   });

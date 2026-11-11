@@ -10,7 +10,6 @@ import { inflateRawAsync } from './zlib.js';
  * @returns Map of member name to contents.
  */
 export async function unzip(zip: Buffer): Promise<Record<string, Buffer>> {
-  // eslint-disable-next-line unicorn/number-literal-case -- conflicts with Prettier formatting
   const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
   if (eocd === -1) {
     throw new Error('no end of central directory record');
@@ -20,7 +19,6 @@ export async function unzip(zip: Buffer): Promise<Record<string, Buffer>> {
   const out: Record<string, Buffer> = {};
   let at = directoryOffset;
   for (let i = 0; i < count; i += 1) {
-    // eslint-disable-next-line unicorn/number-literal-case -- conflicts with Prettier formatting
     if (zip.readUInt32LE(at) !== 0x02_01_4b_50) {
       throw new Error('bad central directory header');
     }
@@ -33,7 +31,7 @@ export async function unzip(zip: Buffer): Promise<Record<string, Buffer>> {
     const commentLength = zip.readUInt16LE(at + 32);
     const local = zip.readUInt32LE(at + 42);
     const name = zip.subarray(at + 46, at + 46 + nameLength).toString('utf8');
-    // eslint-disable-next-line unicorn/number-literal-case -- conflicts with Prettier formatting
+
     if (zip.readUInt32LE(local) !== 0x04_03_4b_50) {
       throw new Error('bad local header');
     }
