@@ -1,3 +1,4 @@
+import { loadFixture } from './utils/fixtures.js';
 import { describe, expect, it } from '@jest/globals';
 import { readFile, symlink } from 'node:fs/promises';
 import nodePath from 'node:path';
@@ -7,6 +8,8 @@ import { promisify } from 'node:util';
 import { Extension } from '../src/extension.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
+
+const versions = await loadFixture('manifest-versions.json');
 
 const { join } = nodePath;
 
@@ -76,8 +79,7 @@ describe('Extension.setVersion', () => {
     expect(
       JSON.parse(await versioned('{"version": "1.0.0"}', '1.1.0-beta.3')),
     ).toEqual({
-      // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture
-      version: '1.1.0.3',
+      version: versions.beta3,
       version_name: '1.1.0-beta.3',
     });
   });
@@ -174,7 +176,7 @@ describe('Extension.zip', () => {
     await withTmp(files, async (dir) => {
       const out = join(dir, 'out', 'ext.zip');
       const count = await Extension.at(join(dir, 'dist'), []).zip(out);
-      const entries = unzip(await readFile(out));
+      const entries = await unzip(await readFile(out));
       expect(count).toBe(3);
       expect(
         Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
@@ -212,7 +214,7 @@ describe('Extension.zip', () => {
         await extension.zip(out);
         await extension.zip(out);
         expect(
-          Object.keys(unzip(await readFile(out))).toSorted((a, b) =>
+          Object.keys(await unzip(await readFile(out))).toSorted((a, b) =>
             a.localeCompare(b),
           ),
         ).toEqual(['a.js', 'manifest.json']);
@@ -229,7 +231,8 @@ describe('Extension.zip', () => {
       async (dir) => {
         const out = join(dir, 'asset.zip');
         await Extension.at(join(dir, 'dist'), []).zip(out);
-        expect(unzip(await readFile(out))['big.bin']).toHaveLength(3_000_000);
+        const entries = await unzip(await readFile(out));
+        expect(entries['big.bin']).toHaveLength(3_000_000);
       },
     );
   });
@@ -258,7 +261,7 @@ describe('Extension.zip', () => {
     await withTmp({ ...files, 'dist/manifest.json': '{}' }, async (dir) => {
       const out = join(dir, 'a.zip');
       expect(await Extension.at(join(dir, 'dist'), []).zip(out)).toBe(101);
-      const entries = unzip(await readFile(out));
+      const entries = await unzip(await readFile(out));
       expect(Object.keys(entries)).toEqual(
         Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
       );
@@ -273,7 +276,7 @@ describe('Extension.zip', () => {
         await symlink(join(dir, 'real.txt'), join(dir, 'dist', 'link.txt'));
         const out = join(dir, 'asset.zip');
         await Extension.at(join(dir, 'dist'), []).zip(out);
-        const entries = unzip(await readFile(out));
+        const entries = await unzip(await readFile(out));
         expect(
           Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
         ).toEqual(['link.txt', 'manifest.json']);

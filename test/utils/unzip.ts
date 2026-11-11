@@ -1,5 +1,6 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- experimental API used on purpose, crc32 is needed to verify members
-import { crc32, inflateRawSync } from 'node:zlib';
+import { crc32 } from 'node:zlib';
+import { inflateRawAsync } from './zlib.js';
 
 /**
  * Read a zip file the way an independent reader would: locate the end of
@@ -8,7 +9,7 @@ import { crc32, inflateRawSync } from 'node:zlib';
  * @param zip - Archive bytes.
  * @returns Map of member name to contents.
  */
-export function unzip(zip: Buffer): Record<string, Buffer> {
+export async function unzip(zip: Buffer): Promise<Record<string, Buffer>> {
   // eslint-disable-next-line unicorn/number-literal-case -- conflicts with Prettier formatting
   const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
   if (eocd === -1) {
@@ -39,8 +40,7 @@ export function unzip(zip: Buffer): Record<string, Buffer> {
     const dataStart =
       local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
     const raw = zip.subarray(dataStart, dataStart + compressed);
-    // eslint-disable-next-line n/no-sync -- test helper, sync is fine in a script or bootstrap because unzip stays synchronous for its callers
-    const data = method === 8 ? inflateRawSync(raw) : raw;
+    const data = method === 8 ? await inflateRawAsync(raw) : raw;
     if (data.length !== size || crc32(data) !== crc) {
       throw new Error(`corrupt member ${name}`);
     }

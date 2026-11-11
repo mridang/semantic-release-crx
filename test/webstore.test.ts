@@ -1,3 +1,4 @@
+import { loadFixture } from './utils/fixtures.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   WebStoreClient,
@@ -11,11 +12,8 @@ import { startTunnelProxy } from './utils/proxy.js';
 import { listen, startFaultyProxy } from './utils/server.js';
 import { inspect } from 'node:util';
 import { MockAgent } from 'undici';
-import {
-  createPublicKey,
-  createVerify,
-  generateKeyPairSync,
-} from 'node:crypto';
+import { createPublicKey, createVerify } from 'node:crypto';
+import { generateKeyPairAsync } from './utils/crypto.js';
 import path from 'node:path';
 import { withTmp } from './utils/tmpdir.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
@@ -25,6 +23,14 @@ import {
   rollback,
   setPublishedDeployPercentage,
 } from '../src/webstore.js';
+
+const urls = await loadFixture('insecure-urls.json');
+
+const { privateKey, publicKey } = await generateKeyPairAsync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+});
 
 afterEach(() => jest.restoreAllMocks());
 
@@ -441,13 +447,6 @@ describe('auth', () => {
   afterEach(() => jest.restoreAllMocks());
 
   const TOKEN = 'POST https://oauth2.googleapis.com/token';
-
-  // eslint-disable-next-line n/no-sync -- test helper, sync is fine in a script or bootstrap because the key pair is built once at module load
-  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
 
   const serviceAccountJson = JSON.stringify({
     type: 'service_account',
@@ -876,8 +875,7 @@ describe('request', () => {
 
   it('refuses a malformed proxy setting without printing it', async () => {
     const saved = { ...process.env };
-    // eslint-disable-next-line sonarjs/no-clear-text-protocols -- test fixture, a malformed proxy URL that is never contacted
-    process.env.HTTPS_PROXY = 'http://user:PW-SECRET@bad host:3128';
+    process.env.HTTPS_PROXY = urls.malformedProxy;
     try {
       const failure = await request(URL_A, {}).catch((error: unknown) => error);
       expect(failure).toMatchObject({ code: 'EPROXY' });
@@ -1107,8 +1105,7 @@ describe('request over a real socket', () => {
     process.env.NO_PROXY = '';
     delete process.env.http_proxy;
     delete process.env.no_proxy;
-    // eslint-disable-next-line sonarjs/no-clear-text-protocols, unicorn/prefer-https -- test fixture, a reserved .invalid host the test proxy answers over plain http
-    const result = await request('http://something.invalid/a', {});
+    const result = await request(urls.invalidHost, {});
     expect(result.body).toEqual({ direct: 1 });
     expect(proxy.tunnelled).toEqual(['something.invalid:80']);
   });
@@ -1138,8 +1135,7 @@ describe('request over a real socket', () => {
       const started = Date.now();
       await expect(
         request(
-          // eslint-disable-next-line sonarjs/no-clear-text-protocols, unicorn/prefer-https -- test fixture, a reserved .invalid host that is never reached
-          'http://something.invalid/a',
+          urls.invalidHost,
           {},
           { retries: 1, deadlineMs: 1500, minTimeout: 1 },
         ),
@@ -1217,8 +1213,7 @@ describe('request over a real socket', () => {
       agent
         .get('https://x.test')
         .intercept({ path: '/a', method: 'GET' })
-        // eslint-disable-next-line unicorn/prefer-https -- test fixture, a redirect target the mock agent never contacts
-        .reply(301, '', { headers: { location: 'http://x.test/b?access=1' } });
+        .reply(301, '', { headers: { location: urls.redirectTarget } });
 
       const result = await request(
         'https://x.test/a',
@@ -1228,8 +1223,7 @@ describe('request over a real socket', () => {
 
       expect(result).toMatchObject({
         status: 301,
-        // eslint-disable-next-line unicorn/prefer-https -- test fixture, a redirect target the mock agent never contacts
-        location: 'http://x.test/b',
+        location: urls.redirectLocation,
       });
     });
 

@@ -1,0 +1,6 @@
+{
+  "malformedProxy": "http://user:PW-SECRET@bad host:3128",
+  "invalidHost": "http://something.invalid/a",
+  "redirectTarget": "http://x.test/b?access=1",
+  "redirectLocation": "http://x.test/b"
+}

@@ -1,3 +1,4 @@
+import { loadFixture } from './utils/fixtures.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +29,8 @@ import {
 } from '../src/index.js';
 // @ts-expect-error semantic-release internals are not typed
 import loadPlugins from 'semantic-release/lib/plugins/index.js';
+
+const versions = await loadFixture('manifest-versions.json');
 
 // Undefined without writing undefined: a spread then overrides the default with undefined.
 let unset: undefined;
@@ -72,7 +75,7 @@ describe('plugin entry point', () => {
         );
         const uploaded = calls.find((c) => c.url.endsWith(':upload'))
           ?.body as Uint8Array;
-        const entries = unzip(Buffer.from(uploaded));
+        const entries = await unzip(Buffer.from(uploaded));
         expect(JSON.parse(entries['manifest.json'].toString()).version).toBe(
           '1.1.0',
         );
@@ -328,7 +331,9 @@ describe('prepare', () => {
         expect(JSON.parse(manifest.replace('// note', ''))).toMatchObject({
           version: '1.1.0',
         });
-        const entries = unzip(await readFile(path.join(dir, 'ext-v1.1.0.zip')));
+        const entries = await unzip(
+          await readFile(path.join(dir, 'ext-v1.1.0.zip')),
+        );
         expect(
           Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
         ).toEqual(['background.js', 'manifest.json']);
@@ -380,7 +385,7 @@ describe('prepare', () => {
         await run(dir, {
           asset: 'out/${branch.name}-${nextRelease.version}.zip',
         }).result;
-        const entries = unzip(
+        const entries = await unzip(
           await readFile(path.join(dir, 'out/main-1.1.0.zip')),
         );
         expect(entries['manifest.json'].toString()).toContain('1.1.0');
@@ -395,8 +400,7 @@ describe('prepare', () => {
           'utf8',
         );
         expect(JSON.parse(source.replace('// note', ''))).toMatchObject({
-          // eslint-disable-next-line sonarjs/no-hardcoded-ip -- test fixture, a manifest version string and not an address
-          version: '1.2.0.4',
+          version: versions.beta4,
           version_name: '1.2.0-beta.4',
         });
       });
