@@ -6,7 +6,7 @@ import {
   resolvePublisherId,
   validateConfig,
 } from '../src/plugin-config.js';
-import { recordingLogger } from './utils/logger.js';
+import type { VerifyConditionsContext } from 'semantic-release';
 
 describe('manifestPathOf', () => {
   it('defaults to dist/manifest.json', () => {
@@ -33,10 +33,9 @@ describe('DEFAULT_IGNORED_WARNINGS', () => {
 });
 
 describe('settings', () => {
-  const context = (extra: Record<string, unknown> = {}) => ({
-    logger: recordingLogger().logger,
-    ...extra,
-  });
+  const context = (
+    extra: Partial<Pick<VerifyConditionsContext, 'branch' | 'env'>> = {},
+  ): Partial<Pick<VerifyConditionsContext, 'branch' | 'env'>> => extra;
 
   const codeOf = (error: Error): string =>
     (error as Error & { code: string }).code;

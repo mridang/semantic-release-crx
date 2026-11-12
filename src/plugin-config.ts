@@ -163,7 +163,7 @@ type Lookup =
  */
 export function resolveExtensionId(
   config: CrxPluginConfig,
-  context: Pick<VerifyConditionsContext, 'branch'>,
+  context: Partial<Pick<VerifyConditionsContext, 'branch'>>,
 ): Lookup {
   const { extensionId } = config;
   if (typeof extensionId === 'string' && extensionId !== '') {
@@ -202,7 +202,7 @@ export function resolveExtensionId(
  */
 export function resolvePublisherId(
   config: CrxPluginConfig,
-  context: Pick<VerifyConditionsContext, 'env'>,
+  context: Partial<Pick<VerifyConditionsContext, 'env'>>,
 ): Lookup {
   const id =
     config.publisherId?.trim() ||

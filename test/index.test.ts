@@ -35,7 +35,9 @@ const versions = await loadFixture('manifest-versions.json');
 // Undefined without writing undefined: a spread then overrides the default with undefined.
 let unset: undefined;
 
-afterEach(() => jest.restoreAllMocks());
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe('plugin entry point', () => {
   it('exports the semantic-release steps, like semantic-release-chrome', async () => {
@@ -140,7 +142,9 @@ describe('plugin entry point', () => {
 });
 
 describe('verifyConditions', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   const run = (
     config: Record<string, unknown>,
@@ -502,7 +506,9 @@ describe('prepare', () => {
 
 // eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial
 describe('publish', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   const mock = (routes: Record<string, unknown>) =>
     mockHttp({ [STATUS]: { json: {} }, ...routes } as never);
@@ -1129,7 +1135,9 @@ describe('publish', () => {
 });
 
 describe('addChannel', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   const PROMOTE = `POST ${BASE}/v2/${ITEM}:setPublishedDeployPercentage`;
 
