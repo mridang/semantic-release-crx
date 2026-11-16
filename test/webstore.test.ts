@@ -68,7 +68,7 @@ const make = (lines: string[] = [], overrides = {}): WebStoreClient =>
     ...overrides,
   });
 
-const tokenFor = (credentials: Parameters<typeof getAccessToken>[0]) =>
+const tokenFor = async (credentials: Parameters<typeof getAccessToken>[0]) =>
   getAccessToken(credentials, mockAgent());
 
 describe('WebStoreClient.upload', () => {
@@ -942,7 +942,7 @@ describe('request over a real socket', () => {
 
   afterEach(async () => {
     process.env = { ...saved };
-    await Promise.all(stops.splice(0).map((stop) => stop()));
+    await Promise.all(stops.splice(0).map(async (stop) => stop()));
   });
 
   it('honours Retry-After before retrying', async () => {
@@ -1203,7 +1203,7 @@ describe('request over a real socket', () => {
     it('are followed on the same origin when asked for, credentials included', async () => {
       const headers: unknown[] = [];
       const { url, seen } = await serve((req, res) => {
-        headers.push(req.headers['authorization']);
+        headers.push(req.headers.authorization);
         if (seen.length === 1) {
           res.writeHead(301, { Location: '/b?x=1' }).end();
           return;

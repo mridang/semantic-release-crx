@@ -27,7 +27,6 @@ import {
   publish,
   verifyConditions,
 } from '../src/index.js';
-// @ts-expect-error semantic-release internals are not typed
 import loadPlugins from 'semantic-release/lib/plugins/index.js';
 
 /** Locale-aware comparer, built once. */
@@ -96,14 +95,14 @@ describe('plugin entry point', () => {
         const uploaded = calls.find((c) => c.url.endsWith(':upload'))
           ?.body as Uint8Array;
         const entries = await unzip(Buffer.from(uploaded));
-        expect(JSON.parse(entries['manifest.json'].toString()).version).toBe(
-          '1.1.0',
-        );
+        expect(JSON.parse(entries['manifest.json'].toString())).toMatchObject({
+          version: '1.1.0',
+        });
         expect(
           JSON.parse(
             await readFile(path.join(dir, 'dist/manifest.json'), 'utf8'),
-          ).version,
-        ).toBe('1.1.0');
+          ),
+        ).toMatchObject({ version: '1.1.0' });
       },
     );
   });
@@ -529,7 +528,7 @@ describe('publish', () => {
   });
 
   const mock = (routes: Record<string, unknown>) =>
-    mockHttp({ [STATUS]: { json: {} }, ...routes } as never);
+    mockHttp({ [STATUS]: { json: {} }, ...routes });
 
   const OK_UPLOAD = { json: { uploadState: 'SUCCEEDED', crxVersion: '1.1.0' } };
 
@@ -548,7 +547,7 @@ describe('publish', () => {
     };
   };
 
-  const withAsset = (fn: (dir: string) => Promise<void>) =>
+  const withAsset = async (fn: (dir: string) => Promise<void>) =>
     withTmp({ 'ext-v1.1.0.zip': 'PK-fake-zip' }, fn);
 
   // eslint-disable-next-line sonarjs/max-lines-per-function -- shared fixtures and helpers close over every nested case, so splitting would be artificial

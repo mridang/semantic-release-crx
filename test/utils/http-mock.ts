@@ -48,7 +48,7 @@ beforeEach(() => {
   install();
   jest
     .spyOn(WebStoreClient, 'connect')
-    .mockImplementation((options) =>
+    .mockImplementation(async (options) =>
       realConnect({ ...options, agent: mockAgent() }),
     );
 });
