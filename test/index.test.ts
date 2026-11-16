@@ -30,6 +30,22 @@ import {
 // @ts-expect-error semantic-release internals are not typed
 import loadPlugins from 'semantic-release/lib/plugins/index.js';
 
+/** Locale-aware comparer, built once. */
+const collator = new Intl.Collator();
+const SKIPPING_VERIFICATION = /Skipping verification/;
+const TAKEN_DOWN = /taken down/;
+const POLICY_WARNING = /policy warning/;
+const WROTE_ZIPPED_FILES = /Wrote zipped file with 2 files/;
+const STATE_PENDING_REVIEW = /state PENDING_REVIEW/;
+const SKIPPING_PUBLISH_STEP = /skipping publish step/;
+const SKIPPING_THE_PUBLISH_STEP = /skipping the publish step/;
+const DISTRIBUTION_SETTINGS = /Distribution settings/;
+const PRE_RELEASE = /pre-release/;
+const CANCELLING = /Cancelling/;
+const PENDING_REVIEW_CANCEL = /still pending review.*cancelPendingSubmission/;
+const PENDING_SUBMISSION_CHECK = /Could not check for a pending submission/;
+const TARGET_LARGER_THAN_CURRENT = /larger than the current target.*10,000/;
+
 const versions = await loadFixture('manifest-versions.json');
 
 // Undefined without writing undefined: a spread then overrides the default with undefined.
@@ -42,7 +58,9 @@ afterEach(() => {
 describe('plugin entry point', () => {
   it('exports the semantic-release steps, like semantic-release-chrome', async () => {
     const plugin = await import('../src/index.js');
-    expect(Object.keys(plugin).toSorted((a, b) => a.localeCompare(b))).toEqual([
+    expect(
+      Object.keys(plugin).toSorted((a, b) => collator.compare(a, b)),
+    ).toEqual([
       'addChannel',
       'default',
       'prepare',
@@ -50,7 +68,7 @@ describe('plugin entry point', () => {
       'verifyConditions',
     ]);
     expect(
-      Object.keys(plugin.default).toSorted((a, b) => a.localeCompare(b)),
+      Object.keys(plugin.default).toSorted((a, b) => collator.compare(a, b)),
     ).toEqual(['addChannel', 'prepare', 'publish', 'verifyConditions']);
   });
 
@@ -166,7 +184,7 @@ describe('verifyConditions', () => {
       failure instanceof AggregateError
         ? (failure.errors as Error[])
         : [failure as Error];
-    return list.map((e) => (e as Error & { code: string }).code);
+    return list.map((error) => (error as Error & { code: string }).code);
   };
 
   describe('verifyConditions', () => {
@@ -191,7 +209,7 @@ describe('verifyConditions', () => {
       );
       await result;
       expect(calls).toHaveLength(0);
-      expect(lines[0]).toMatch(/Skipping verification/);
+      expect(lines[0]).toMatch(SKIPPING_VERIFICATION);
     });
 
     it('does nothing on a pre-release branch when prerelease is skip', async () => {
@@ -291,10 +309,10 @@ describe('verifyConditions', () => {
       });
       const first = run({});
       await first.result;
-      expect(first.lines.join('\n')).toMatch(/taken down/);
+      expect(first.lines.join('\n')).toMatch(TAKEN_DOWN);
       const second = run({});
       await second.result;
-      expect(second.lines.join('\n')).toMatch(/policy warning/);
+      expect(second.lines.join('\n')).toMatch(POLICY_WARNING);
     });
   });
 });
@@ -339,12 +357,12 @@ describe('prepare', () => {
           await readFile(path.join(dir, 'ext-v1.1.0.zip')),
         );
         expect(
-          Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+          Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
         ).toEqual(['background.js', 'manifest.json']);
         expect(entries['manifest.json'].toString()).toContain(
           '"version": "1.1.0"',
         );
-        expect(lines.join('\n')).toMatch(/Wrote zipped file with 2 files/);
+        expect(lines.join('\n')).toMatch(WROTE_ZIPPED_FILES);
       });
     });
 
@@ -554,7 +572,7 @@ describe('publish', () => {
           'POST ext-1:publish',
         ]);
         expect(calls[2].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
-        expect(lines.join('\n')).toMatch(/state PENDING_REVIEW/);
+        expect(lines.join('\n')).toMatch(STATE_PENDING_REVIEW);
       });
     });
 
@@ -627,7 +645,7 @@ describe('publish', () => {
         const { result, lines } = run(dir, { target: 'draft' });
         expect(await result).toMatchObject({ name: 'Chrome Web Store' });
         expect(calls).toHaveLength(2);
-        expect(lines.join('\n')).toMatch(/skipping publish step/);
+        expect(lines.join('\n')).toMatch(SKIPPING_PUBLISH_STEP);
       });
     });
 
@@ -639,7 +657,7 @@ describe('publish', () => {
       });
       expect(await result).toBeUndefined();
       expect(calls).toHaveLength(0);
-      expect(lines[0]).toMatch(/skipping the publish step/);
+      expect(lines[0]).toMatch(SKIPPING_THE_PUBLISH_STEP);
     });
 
     it('stages the submission for target staged', async () => {
@@ -662,7 +680,7 @@ describe('publish', () => {
         const { result, lines } = run(dir, { target: 'trustedTesters' });
         await result;
         expect(calls[2].body).toEqual({ publishType: 'DEFAULT_PUBLISH' });
-        expect(lines.join('\n')).toMatch(/Distribution settings/);
+        expect(lines.join('\n')).toMatch(DISTRIBUTION_SETTINGS);
       });
     });
 
@@ -829,7 +847,7 @@ describe('publish', () => {
         );
         expect(await skipped.result).toBeUndefined();
         expect(calls).toHaveLength(0);
-        expect(skipped.lines[0]).toMatch(/pre-release/);
+        expect(skipped.lines[0]).toMatch(PRE_RELEASE);
         expect(await run(dir, { prerelease: 'skip' }).result).toMatchObject({
           name: 'Chrome Web Store',
         });
@@ -867,7 +885,7 @@ describe('publish', () => {
         (error: unknown) => error,
       )) as AggregateError;
       expect(
-        failure.errors.map((e: Error & { code?: string }) => e.code),
+        failure.errors.map((error: Error & { code?: string }) => error.code),
       ).toEqual(['ENOASSET', 'ENOEXTENSIONID', 'ENOPUBLISHERID']);
     });
 
@@ -975,7 +993,7 @@ describe('publish', () => {
           'upload',
           'publish',
         ]);
-        expect(lines.join('\n')).toMatch(/Cancelling/);
+        expect(lines.join('\n')).toMatch(CANCELLING);
       });
     });
 
@@ -1027,9 +1045,7 @@ describe('publish', () => {
         const { result, lines } = run(dir);
         await result;
         expect(ops(calls)).toEqual(['fetchStatus', 'upload', 'publish']);
-        expect(lines.join('\n')).toMatch(
-          /still pending review.*cancelPendingSubmission/,
-        );
+        expect(lines.join('\n')).toMatch(PENDING_REVIEW_CANCEL);
       });
     });
 
@@ -1108,9 +1124,7 @@ describe('publish', () => {
         });
         const { result, lines } = run(dir);
         expect(await result).toMatchObject({ name: 'Chrome Web Store' });
-        expect(lines.join('\n')).toMatch(
-          /Could not check for a pending submission/,
-        );
+        expect(lines.join('\n')).toMatch(PENDING_SUBMISSION_CHECK);
       });
     });
 
@@ -1216,7 +1230,7 @@ describe('addChannel', () => {
         { env: {} },
       ).result.catch((error: unknown) => error)) as AggregateError;
       expect(
-        missing.errors.map((e: Error & { code?: string }) => e.code),
+        missing.errors.map((error: Error & { code?: string }) => error.code),
       ).toEqual(['ENOEXTENSIONID', 'ENOPUBLISHERID']);
       await expect(
         run({ promoteDeployPercentage: 5 }, { env: {} }).result,
@@ -1234,9 +1248,7 @@ describe('addChannel', () => {
         run({ promoteDeployPercentage: 5 }).result,
       ).rejects.toMatchObject({
         code: 'EWEBSTOREBADREQUEST',
-        message: expect.stringMatching(
-          /larger than the current target.*10,000/,
-        ),
+        message: expect.stringMatching(TARGET_LARGER_THAN_CURRENT),
       });
     });
 

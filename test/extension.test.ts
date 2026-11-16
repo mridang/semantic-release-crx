@@ -9,6 +9,13 @@ import { Extension } from '../src/extension.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
 
+/** Locale-aware comparer, built once. */
+const collator = new Intl.Collator();
+const BARE_LINE_FEED = /[^\r]\n/;
+const WROTE_VERSION_1_0_0 = /^Wrote version 1\.0\.0 to /;
+const WROTE_RC_VERSION =
+  /^Wrote version 1\.0\.0\.2 \(version_name 1\.0\.0-rc\.2\) to /;
+
 const versions = await loadFixture('manifest-versions.json');
 
 const { join } = nodePath;
@@ -72,7 +79,7 @@ describe('Extension.setVersion', () => {
   it('uses CRLF line endings when the file does', async () => {
     const out = await versioned('{\r\n  "name": "x"\r\n}\r\n', '1.0.0');
     expect(JSON.parse(out)).toEqual({ name: 'x', version: '1.0.0' });
-    expect(out).not.toMatch(/[^\r]\n/);
+    expect(out).not.toMatch(BARE_LINE_FEED);
   });
 
   it('writes version_name for a pre-release (issue 111)', async () => {
@@ -97,7 +104,7 @@ describe('Extension.setVersion', () => {
 
   it('copes with a 1 MB manifest', async () => {
     const big = JSON.stringify({
-      list: Array.from({ length: 150_000 }, (_, i) => i),
+      list: Array.from({ length: 150_000 }, (_, index) => index),
       version: '1.0.0',
     });
     expect(big.length).toBeGreaterThan(900_000);
@@ -108,10 +115,8 @@ describe('Extension.setVersion', () => {
     const lines: string[] = [];
     await versioned('{}', '1.0.0', lines);
     await versioned('{}', '1.0.0-rc.2', lines);
-    expect(lines[0]).toMatch(/^Wrote version 1\.0\.0 to /);
-    expect(lines[1]).toMatch(
-      /^Wrote version 1\.0\.0\.2 \(version_name 1\.0\.0-rc\.2\) to /,
-    );
+    expect(lines[0]).toMatch(WROTE_VERSION_1_0_0);
+    expect(lines[1]).toMatch(WROTE_RC_VERSION);
   });
 
   it('updates every manifest, in order (issue 81)', async () => {
@@ -179,7 +184,7 @@ describe('Extension.zip', () => {
       const entries = await unzip(await readFile(out));
       expect(count).toBe(3);
       expect(
-        Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+        Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
       ).toEqual(['img/ü.png', 'js/app.js', 'manifest.json']);
       expect(entries['js/app.js'].toString()).toBe(files['dist/js/app.js']);
       expect([...entries['img/ü.png']]).toEqual([0, 1, 2, 3]);
@@ -215,7 +220,7 @@ describe('Extension.zip', () => {
         await extension.zip(out);
         expect(
           Object.keys(await unzip(await readFile(out))).toSorted((a, b) =>
-            a.localeCompare(b),
+            collator.compare(a, b),
           ),
         ).toEqual(['a.js', 'manifest.json']);
       },
@@ -253,9 +258,9 @@ describe('Extension.zip', () => {
 
   it('archives many files in sorted order', async () => {
     const files = Object.fromEntries(
-      Array.from({ length: 100 }, (_, i) => [
-        `dist/f${String(i).padStart(3, '0')}.txt`,
-        `file ${i}`,
+      Array.from({ length: 100 }, (_, index) => [
+        `dist/f${String(index).padStart(3, '0')}.txt`,
+        `file ${index}`,
       ]),
     );
     await withTmp({ ...files, 'dist/manifest.json': '{}' }, async (dir) => {
@@ -263,7 +268,7 @@ describe('Extension.zip', () => {
       expect(await Extension.at(join(dir, 'dist'), []).zip(out)).toBe(101);
       const entries = await unzip(await readFile(out));
       expect(Object.keys(entries)).toEqual(
-        Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+        Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
       );
       expect(entries['f042.txt'].toString()).toBe('file 42');
     });
@@ -278,7 +283,7 @@ describe('Extension.zip', () => {
         await Extension.at(join(dir, 'dist'), []).zip(out);
         const entries = await unzip(await readFile(out));
         expect(
-          Object.keys(entries).toSorted((a, b) => a.localeCompare(b)),
+          Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
         ).toEqual(['link.txt', 'manifest.json']);
         expect(entries['link.txt'].toString()).toBe('linked');
       },

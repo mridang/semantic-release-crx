@@ -37,7 +37,7 @@ export async function unzip(zip: Buffer): Promise<Record<string, Buffer>> {
   const directoryOffset = zip.readUInt32LE(eocd + 16);
   const out: Record<string, Buffer> = {};
   let at = directoryOffset;
-  for (let i = 0; i < count; i += 1) {
+  for (let index = 0; index < count; index += 1) {
     if (zip.readUInt32LE(at) !== 0x02_01_4b_50) {
       throw new Error('bad central directory header');
     }

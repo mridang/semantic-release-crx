@@ -8,6 +8,8 @@ import {
 } from '../src/plugin-config.js';
 import type { VerifyConditionsContext } from 'semantic-release';
 
+const DEVELOPER_DASHBOARD = /Developer Dashboard/;
+
 describe('manifestPathOf', () => {
   it('defaults to dist/manifest.json', () => {
     expect(manifestPathOf({})).toBe('dist/manifest.json');
@@ -112,7 +114,7 @@ describe('settings', () => {
       const result = resolvePublisherId({}, context({ env: {} }));
       expect('error' in result && codeOf(result.error)).toBe('ENOPUBLISHERID');
       expect('error' in result && result.error.message).toMatch(
-        /Developer Dashboard/,
+        DEVELOPER_DASHBOARD,
       );
     });
   });

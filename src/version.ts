@@ -3,6 +3,8 @@
  */
 import SemanticReleaseError from '@semantic-release/error';
 
+const DIGITS_ONLY = /^\d+$/;
+
 export interface ManifestVersion {
   /**
    * Value for the manifest `version` field: one to four dot separated
@@ -53,7 +55,7 @@ export function toManifestVersion(semver: string): ManifestVersion {
   const core = [major, minor, patch].map(Number);
   const counter = pre
     ?.split('.')
-    .filter((id) => /^\d+$/.test(id))
+    .filter((id) => DIGITS_ONLY.test(id))
     .map(Number)
     .at(-1);
   if (pre !== undefined && counter === undefined) {

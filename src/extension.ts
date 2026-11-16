@@ -16,7 +16,7 @@ import { toManifestVersion } from './version.js';
 type ZipWithOptions = (
   data: AsyncZippable,
   opts: ZipOptions,
-  cb: (err: Error | null, data: Uint8Array) => void,
+  callback: (err: Error | null, data: Uint8Array) => void,
 ) => void;
 
 // Local midnight, because the zip format stores local time: the same bytes come out in every timezone.
@@ -50,21 +50,24 @@ function kindOfInfo(info: Stats): EntryKind {
  */
 export class Extension {
   private constructor(
-    private readonly distFolder: string,
+    private readonly distributionFolder: string,
     private readonly manifests: readonly string[],
   ) {}
 
   /**
    * Point at a built extension without reading or changing it yet.
-   * @param distFolder - Folder whose contents are zipped.
+   * @param distributionFolder - Folder whose contents are zipped.
    * @param manifests - Manifest files that receive the release version.
    * @returns A handle for writing the version and zipping the folder.
    * @example
    * const extension = Extension.at('dist', ['dist/manifest.json']);
    * await extension.zip('release/extension.zip');
    */
-  static at(distFolder: string, manifests: readonly string[]): Extension {
-    return new Extension(distFolder, manifests);
+  static at(
+    distributionFolder: string,
+    manifests: readonly string[],
+  ): Extension {
+    return new Extension(distributionFolder, manifests);
   }
 
   /**
@@ -150,14 +153,14 @@ export class Extension {
    * );
    */
   async zip(output: string): Promise<number> {
-    const root = nodePath.resolve(this.distFolder);
+    const root = nodePath.resolve(this.distributionFolder);
     const target = nodePath.resolve(output);
     const isFolder = await stat(root)
       .then((info) => info.isDirectory())
       .catch(() => false);
     if (!isFolder) {
       throw new SemanticReleaseError(
-        `The distFolder "${this.distFolder}" does not exist or is not a folder. Build the extension before the prepare step runs, or set distFolder.`,
+        `The distFolder "${this.distributionFolder}" does not exist or is not a folder. Build the extension before the prepare step runs, or set distFolder.`,
         'ENODISTFOLDER',
       );
     }
@@ -195,7 +198,7 @@ export class Extension {
       .toSorted((a, b) => Number(a > b) - Number(a < b));
     if (paths.length === 0) {
       throw new SemanticReleaseError(
-        `The distFolder "${this.distFolder}" contains no files to zip.`,
+        `The distFolder "${this.distributionFolder}" contains no files to zip.`,
         'ENODISTFOLDER',
       );
     }

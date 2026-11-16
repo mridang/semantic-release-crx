@@ -12,6 +12,6 @@ describe('isOneOf', () => {
   it('rejects an unlisted string and non-strings', () => {
     expect(isOneOf(COLOURS, 'blue')).toBe(false);
     expect(isOneOf(COLOURS, 1)).toBe(false);
-    expect(isOneOf(COLOURS, undefined)).toBe(false);
+    expect(isOneOf(COLOURS)).toBe(false);
   });
 });

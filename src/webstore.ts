@@ -480,7 +480,7 @@ export async function request(
     });
     const text = await response.body.text().catch((error: unknown) => {
       if (codeOf(error) === BODY_PHASE_CODE && left > 0) {
-        return undefined;
+        return;
       }
       throw error;
     });
@@ -879,6 +879,7 @@ export interface RollbackRequest {
   /** Why the rollback is made; shown in the Developer Dashboard. */
   readonly rollbackReason: string;
   /** The version to assign to the package being rolled back to. */
+  // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
   readonly newVersion: string;
   /** The previously published version to roll back to. */
   readonly targetCrxVersion?: string;
@@ -1289,11 +1290,10 @@ export class WebStoreClient {
   ): Promise<ItemState> {
     const result = await this.publish(body);
     const warnings = result.warningInfo?.warnings ?? [];
-    warnings.forEach((warning) =>
+    for (const warning of warnings)
       this.options.log?.(
         `${warning.reason ?? 'WARNING'}: ${warning.description ?? ''}`,
-      ),
-    );
+      );
     const blocking = warnings.filter(
       (warning) => !policy.ignoredWarnings.includes(warning.reason ?? ''),
     );
@@ -1456,8 +1456,10 @@ export async function setPublishedDeployPercentage(
 export async function rollback(
   options: ConnectionOptions & RollbackRequest,
 ): Promise<void> {
+  // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
   const { rollbackReason, newVersion, targetCrxVersion, validateOnly } =
     options;
+  // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
   if (!rollbackReason?.trim() || !newVersion?.trim()) {
     throw new SemanticReleaseError(
       'A rollback needs both rollbackReason and newVersion; newVersion must be higher than the currently published version.',
@@ -1467,6 +1469,7 @@ export async function rollback(
   const client = await connect(options);
   await client.rollback({
     rollbackReason,
+    // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
     newVersion,
     ...(targetCrxVersion === undefined ? {} : { targetCrxVersion }),
     ...(validateOnly === undefined ? {} : { validateOnly }),
