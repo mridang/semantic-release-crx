@@ -20,7 +20,10 @@ describe('isRecord', () => {
 
 describe('stringAt, booleanAt and numberAt', () => {
   it('ignore a member that is inherited from the prototype', () => {
-    const inherited = Object.create({ s: 'x', b: true, n: 1 });
+    const inherited = Object.setPrototypeOf(
+      {},
+      { s: 'x', b: true, n: 1 },
+    ) as Record<string, unknown>;
     expect(stringAt(inherited, 's')).toBeUndefined();
     expect(booleanAt(inherited, 'b')).toBeUndefined();
     expect(numberAt(inherited, 'n')).toBeUndefined();

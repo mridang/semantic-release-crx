@@ -1,11 +1,12 @@
 import { loadFixture } from './utils/fixtures.js';
 import { describe, expect, it } from '@jest/globals';
 import { readFile, symlink } from 'node:fs/promises';
-import nodePath from 'node:path';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 // noinspection ES6PreferShortImport
 import { Extension } from '../src/extension.js';
+import { isRecord } from '../src/utils/object.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
 
@@ -18,8 +19,6 @@ const WROTE_RC_VERSION =
 
 const versions = await loadFixture('manifest-versions.json');
 
-const { join } = nodePath;
-
 const noop = (): void => {};
 
 const versioned = async (
@@ -28,9 +27,11 @@ const versioned = async (
   lines: string[] = [],
 ): Promise<string> =>
   withTmp({ 'manifest.json': source }, async (dir) => {
-    const path = join(dir, 'manifest.json');
-    await Extension.at(dir, [path]).setVersion(semver, (m) => lines.push(m));
-    return readFile(path, 'utf8');
+    const manifestPath = path.join(dir, 'manifest.json');
+    await Extension.at(dir, [manifestPath]).setVersion(semver, (m) =>
+      lines.push(m),
+    );
+    return readFile(manifestPath, 'utf8');
   });
 
 describe('Extension.setVersion', () => {
@@ -108,7 +109,9 @@ describe('Extension.setVersion', () => {
       version: '1.0.0',
     });
     expect(big.length).toBeGreaterThan(900_000);
-    expect(JSON.parse(await versioned(big, '2.0.0')).version).toBe('2.0.0');
+    expect(JSON.parse(await versioned(big, '2.0.0'))).toMatchObject({
+      version: '2.0.0',
+    });
   });
 
   it('tells the log what it wrote', async () => {
@@ -124,14 +127,17 @@ describe('Extension.setVersion', () => {
       { 'dist/manifest.json': '{}', 'src/manifest.json': '{"version": "0"}' },
       async (dir) => {
         const paths = [
-          join(dir, 'dist/manifest.json'),
-          join(dir, 'src/manifest.json'),
+          path.join(dir, 'dist/manifest.json'),
+          path.join(dir, 'src/manifest.json'),
         ];
-        await Extension.at(join(dir, 'dist'), paths).setVersion('3.0.0', noop);
-        for (const path of paths) {
-          expect(JSON.parse(await readFile(path, 'utf8')).version).toBe(
-            '3.0.0',
-          );
+        await Extension.at(path.join(dir, 'dist'), paths).setVersion(
+          '3.0.0',
+          noop,
+        );
+        for (const manifest of paths) {
+          expect(JSON.parse(await readFile(manifest, 'utf8'))).toMatchObject({
+            version: '3.0.0',
+          });
         }
       },
     );
@@ -140,7 +146,7 @@ describe('Extension.setVersion', () => {
   it('fails with ENOMANIFEST when the file is missing', async () => {
     await withTmp({}, async (dir) => {
       await expect(
-        Extension.at(dir, [join(dir, 'manifest.json')]).setVersion(
+        Extension.at(dir, [path.join(dir, 'manifest.json')]).setVersion(
           '1.0.0',
           noop,
         ),
@@ -152,7 +158,7 @@ describe('Extension.setVersion', () => {
     await withTmp({ 'a.json': '{"a": ', 'b.json': '[]' }, async (dir) => {
       for (const name of ['a.json', 'b.json']) {
         await expect(
-          Extension.at(dir, [join(dir, name)]).setVersion('1.0.0', noop),
+          Extension.at(dir, [path.join(dir, name)]).setVersion('1.0.0', noop),
         ).rejects.toMatchObject({ code: 'EINVALIDMANIFEST' });
       }
     });
@@ -160,13 +166,13 @@ describe('Extension.setVersion', () => {
 
   it('rejects a version Chrome cannot use before touching any file', async () => {
     await withTmp({ 'manifest.json': '{"version":"1"}' }, async (dir) => {
-      const path = join(dir, 'manifest.json');
+      const manifestPath = path.join(dir, 'manifest.json');
       await expect(
-        Extension.at(dir, [path]).setVersion('nope', noop),
+        Extension.at(dir, [manifestPath]).setVersion('nope', noop),
       ).rejects.toMatchObject({
         code: 'EINVALIDVERSION',
       });
-      expect(await readFile(path, 'utf8')).toBe('{"version":"1"}');
+      expect(await readFile(manifestPath, 'utf8')).toBe('{"version":"1"}');
     });
   });
 });
@@ -179,8 +185,8 @@ describe('Extension.zip', () => {
       'dist/img/ü.png': Buffer.from([0, 1, 2, 3]),
     };
     await withTmp(files, async (dir) => {
-      const out = join(dir, 'out', 'ext.zip');
-      const count = await Extension.at(join(dir, 'dist'), []).zip(out);
+      const out = path.join(dir, 'out', 'ext.zip');
+      const count = await Extension.at(path.join(dir, 'dist'), []).zip(out);
       const entries = await unzip(await readFile(out));
       expect(count).toBe(3);
       expect(
@@ -195,13 +201,15 @@ describe('Extension.zip', () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'dist/a/b.txt': 'x'.repeat(5000) },
       async (dir) => {
-        const out = join(dir, 'ext.zip');
-        await Extension.at(join(dir, 'dist'), []).zip(out);
+        const out = path.join(dir, 'ext.zip');
+        await Extension.at(path.join(dir, 'dist'), []).zip(out);
         // A spawn failure (no unzip binary) is a string code and skips the check.
         const status = await promisify(execFile)('/usr/bin/unzip', ['-tq', out])
           .then(() => 0)
-          .catch((error: { code?: unknown }) =>
-            typeof error.code === 'string' ? undefined : error.code,
+          .catch((error: unknown) =>
+            isRecord(error) && typeof error.code !== 'string'
+              ? error.code
+              : undefined,
           );
         if (status !== undefined) {
           expect(status).toBe(0);
@@ -214,8 +222,8 @@ describe('Extension.zip', () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'dist/a.js': '1' },
       async (dir) => {
-        const out = join(dir, 'dist', 'asset.zip');
-        const extension = Extension.at(join(dir, 'dist'), []);
+        const out = path.join(dir, 'dist', 'asset.zip');
+        const extension = Extension.at(path.join(dir, 'dist'), []);
         await extension.zip(out);
         await extension.zip(out);
         expect(
@@ -234,8 +242,8 @@ describe('Extension.zip', () => {
         'dist/big.bin': Buffer.alloc(3_000_000, 7),
       },
       async (dir) => {
-        const out = join(dir, 'asset.zip');
-        await Extension.at(join(dir, 'dist'), []).zip(out);
+        const out = path.join(dir, 'asset.zip');
+        await Extension.at(path.join(dir, 'dist'), []).zip(out);
         const entries = await unzip(await readFile(out));
         expect(entries['big.bin']).toHaveLength(3_000_000);
       },
@@ -246,11 +254,11 @@ describe('Extension.zip', () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'dist/a.js': 'abc' },
       async (dir) => {
-        const extension = Extension.at(join(dir, 'dist'), []);
-        await extension.zip(join(dir, '1.zip'));
-        await extension.zip(join(dir, '2.zip'));
-        const first = await readFile(join(dir, '1.zip'));
-        const second = await readFile(join(dir, '2.zip'));
+        const extension = Extension.at(path.join(dir, 'dist'), []);
+        await extension.zip(path.join(dir, '1.zip'));
+        await extension.zip(path.join(dir, '2.zip'));
+        const first = await readFile(path.join(dir, '1.zip'));
+        const second = await readFile(path.join(dir, '2.zip'));
         expect(first.equals(second)).toBe(true);
       },
     );
@@ -264,8 +272,8 @@ describe('Extension.zip', () => {
       ]),
     );
     await withTmp({ ...files, 'dist/manifest.json': '{}' }, async (dir) => {
-      const out = join(dir, 'a.zip');
-      expect(await Extension.at(join(dir, 'dist'), []).zip(out)).toBe(101);
+      const out = path.join(dir, 'a.zip');
+      expect(await Extension.at(path.join(dir, 'dist'), []).zip(out)).toBe(101);
       const entries = await unzip(await readFile(out));
       expect(Object.keys(entries)).toEqual(
         Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
@@ -278,9 +286,12 @@ describe('Extension.zip', () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'real.txt': 'linked' },
       async (dir) => {
-        await symlink(join(dir, 'real.txt'), join(dir, 'dist', 'link.txt'));
-        const out = join(dir, 'asset.zip');
-        await Extension.at(join(dir, 'dist'), []).zip(out);
+        await symlink(
+          path.join(dir, 'real.txt'),
+          path.join(dir, 'dist', 'link.txt'),
+        );
+        const out = path.join(dir, 'asset.zip');
+        await Extension.at(path.join(dir, 'dist'), []).zip(out);
         const entries = await unzip(await readFile(out));
         expect(
           Object.keys(entries).toSorted((a, b) => collator.compare(a, b)),
@@ -294,9 +305,12 @@ describe('Extension.zip', () => {
     await withTmp(
       { 'dist/manifest.json': '{}', 'assets/a.png': 'x' },
       async (dir) => {
-        await symlink(join(dir, 'assets'), join(dir, 'dist', 'assets'));
+        await symlink(
+          path.join(dir, 'assets'),
+          path.join(dir, 'dist', 'assets'),
+        );
         await expect(
-          Extension.at(join(dir, 'dist'), []).zip(join(dir, 'a.zip')),
+          Extension.at(path.join(dir, 'dist'), []).zip(path.join(dir, 'a.zip')),
         ).rejects.toMatchObject({
           code: 'ESYMLINKDIR',
           message: expect.stringContaining('assets'),
@@ -307,9 +321,9 @@ describe('Extension.zip', () => {
 
   it('refuses a symlink loop', async () => {
     await withTmp({ 'dist/manifest.json': '{}' }, async (dir) => {
-      await symlink(join(dir, 'dist'), join(dir, 'dist', 'loop'));
+      await symlink(path.join(dir, 'dist'), path.join(dir, 'dist', 'loop'));
       await expect(
-        Extension.at(join(dir, 'dist'), []).zip(join(dir, 'a.zip')),
+        Extension.at(path.join(dir, 'dist'), []).zip(path.join(dir, 'a.zip')),
       ).rejects.toMatchObject({ code: 'ESYMLINKDIR' });
     });
   });
@@ -324,8 +338,8 @@ describe('Extension.zip', () => {
             ['UTC', 'Australia/Sydney', 'America/Los_Angeles'].map(
               async (tz, index) => {
                 process.env.TZ = tz;
-                const out = join(dir, `${index}.zip`);
-                await Extension.at(join(dir, 'dist'), []).zip(out);
+                const out = path.join(dir, `${index}.zip`);
+                await Extension.at(path.join(dir, 'dist'), []).zip(out);
                 return readFile(out);
               },
             ),
@@ -346,11 +360,11 @@ describe('Extension.zip', () => {
   it('fails with a coded error naming a broken symlink', async () => {
     await withTmp({ 'dist/manifest.json': '{}' }, async (dir) => {
       await symlink(
-        join(dir, 'missing.txt'),
-        join(dir, 'dist', 'dangling.txt'),
+        path.join(dir, 'missing.txt'),
+        path.join(dir, 'dist', 'dangling.txt'),
       );
       await expect(
-        Extension.at(join(dir, 'dist'), []).zip(join(dir, 'a.zip')),
+        Extension.at(path.join(dir, 'dist'), []).zip(path.join(dir, 'a.zip')),
       ).rejects.toMatchObject({
         code: 'EBROKENSYMLINK',
         message: expect.stringContaining('dangling.txt'),
@@ -361,13 +375,13 @@ describe('Extension.zip', () => {
   it('fails with ENODISTFOLDER when the folder is missing or empty', async () => {
     await withTmp({ 'dist/sub/.keep': '' }, async (dir) => {
       await expect(
-        Extension.at(join(dir, 'nope'), []).zip(join(dir, 'a.zip')),
+        Extension.at(path.join(dir, 'nope'), []).zip(path.join(dir, 'a.zip')),
       ).rejects.toMatchObject({
         code: 'ENODISTFOLDER',
       });
       await expect(
-        Extension.at(join(dir, 'dist'), []).zip(
-          join(dir, 'dist', 'sub', '.keep'),
+        Extension.at(path.join(dir, 'dist'), []).zip(
+          path.join(dir, 'dist', 'sub', '.keep'),
         ),
       ).rejects.toMatchObject({ code: 'ENODISTFOLDER' });
     });

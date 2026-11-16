@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import type { VerifyConditionsContext } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { readEnv } from './utils/env.js';
@@ -258,7 +259,7 @@ export function validateConfig(
     ...(target !== undefined && !isOneOf(PUBLISH_TARGETS, target)
       ? [
           new SemanticReleaseError(
-            `Option 'target' must be one of ${PUBLISH_TARGETS.join(', ')}, not "${String(target)}".`,
+            `Option 'target' must be one of ${PUBLISH_TARGETS.join(', ')}, not "${typeof target === 'string' ? target : inspect(target)}".`,
             'EINVALIDTARGET',
           ),
         ]
@@ -266,7 +267,7 @@ export function validateConfig(
     ...(prerelease !== undefined && !isOneOf(PRERELEASE_MODES, prerelease)
       ? [
           new SemanticReleaseError(
-            `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${String(prerelease)}".`,
+            `Option 'prerelease' must be one of ${PRERELEASE_MODES.join(', ')}, not "${typeof prerelease === 'string' ? prerelease : inspect(prerelease)}".`,
             'EINVALIDPRERELEASE',
           ),
         ]

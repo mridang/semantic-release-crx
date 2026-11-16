@@ -2,7 +2,7 @@
  * @file Builds the Chrome extension folder on disk: writes its version and zips it.
  */
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { type Stats } from 'node:fs';
+import type { Stats } from 'node:fs';
 import nodePath from 'node:path';
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { zip, type AsyncZippable, type ZipOptions } from 'fflate';
