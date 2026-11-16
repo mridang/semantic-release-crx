@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+// eslint-disable-next-line e18e/ban-dependencies -- lodash template compiles the <%= %> syntax, which has no identical native replacement
 import template from 'lodash/template.js';
 import SemanticReleaseError from '@semantic-release/error';
 import type {
@@ -138,7 +139,12 @@ export async function prepare(
   config: CrxPluginConfig,
   context: PrepareContext,
 ): Promise<void> {
-  const { asset, additionalManifests, prerelease } = config;
+  const {
+    asset,
+    additionalManifests,
+    prerelease,
+    distFolder: distributionFolderSetting,
+  } = config;
   const problems = validateConfig(config, true);
   if (problems.length > 0 || !asset) {
     throw new AggregateError(
@@ -161,11 +167,11 @@ export async function prepare(
     );
   }
   const cwd = context.cwd ?? process.cwd();
-  const distFolder = config.distFolder ?? DEFAULT_DIST_FOLDER;
+  const distributionFolder = distributionFolderSetting ?? DEFAULT_DIST_FOLDER;
   const manifests = [manifestPathOf(config), ...(additionalManifests ?? [])];
   const log = (message: string): void => context.logger.log(message);
   const extension = Extension.at(
-    path.resolve(cwd, distFolder),
+    path.resolve(cwd, distributionFolder),
     manifests.map((manifest) => path.resolve(cwd, manifest)),
   );
   await extension.setVersion(semver, log);

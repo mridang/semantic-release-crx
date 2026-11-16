@@ -3,6 +3,10 @@ import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { toManifestVersion } from '../src/version.js';
 
+const NOT_A_VALID_SEMANTIC = /not a valid semantic/;
+const NO_NUMERIC_IDENTIFIER = /no numeric/;
+const MAX_COMPONENT_VALUE = /65535/;
+
 const versions = await loadFixture('manifest-versions.json');
 
 describe('toManifestVersion', () => {
@@ -39,16 +43,20 @@ describe('toManifestVersion', () => {
   });
 
   it('rejects text that is not a semantic version', () => {
-    expect(() => toManifestVersion('v1.2')).toThrow(/not a valid semantic/);
+    expect(() => toManifestVersion('v1.2')).toThrow(NOT_A_VALID_SEMANTIC);
   });
 
   it('rejects a pre-release without a numeric identifier', () => {
-    expect(() => toManifestVersion('1.0.0-beta')).toThrow(/no numeric/);
+    expect(() => toManifestVersion('1.0.0-beta')).toThrow(
+      NO_NUMERIC_IDENTIFIER,
+    );
   });
 
   it('rejects parts above 65535, which Chrome does not accept', () => {
-    expect(() => toManifestVersion('1.70000.0')).toThrow(/65535/);
-    expect(() => toManifestVersion('1.0.0-alpha.65536')).toThrow(/65535/);
+    expect(() => toManifestVersion('1.70000.0')).toThrow(MAX_COMPONENT_VALUE);
+    expect(() => toManifestVersion('1.0.0-alpha.65536')).toThrow(
+      MAX_COMPONENT_VALUE,
+    );
   });
 
   it('accepts the largest allowed part', () => {

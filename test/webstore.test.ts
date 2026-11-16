@@ -24,6 +24,15 @@ import {
   setPublishedDeployPercentage,
 } from '../src/webstore.js';
 
+const BEING_PROCESSED = /being processed/;
+const MEMBER_OF_PUBLISHER = /member of the publisher/;
+const MENTIONS_DRAFT = /draft/;
+const SECRET_TOKEN_NAMES = /TOPSECRET|REFRESH/;
+const LOOPBACK_NETWORK_ERROR = /Network error calling 127\.0\.0\.1/;
+const ABORTED_DUE_TO_TIMEOUT = /aborted due to timeout/;
+const OTHER_SIDE_CLOSED = /other side closed/;
+const INVALID_HOST_NETWORK_ERROR = /Network error calling something\.invalid/;
+
 const urls = await loadFixture('insecure-urls.json');
 
 const { privateKey, publicKey } = await generateKeyPairAsync('rsa', {
@@ -98,7 +107,7 @@ describe('WebStoreClient.upload', () => {
     });
     await make(lines).upload(Buffer.from('z'));
     expect(calls.filter((c) => c.url.includes('fetchStatus'))).toHaveLength(3);
-    expect(lines[0]).toMatch(/being processed/);
+    expect(lines[0]).toMatch(BEING_PROCESSED);
   });
 
   it('fails with EUPLOADFAILED when the async upload fails', async () => {
@@ -149,7 +158,7 @@ describe('WebStoreClient.upload', () => {
         {},
       ],
     });
-    for (let i = 0; i < 3; i += 1) {
+    for (let index = 0; index < 3; index += 1) {
       await expect(make().upload(Buffer.from('z'))).rejects.toMatchObject({
         code: 'EUPLOADFAILED',
       });
@@ -200,13 +209,13 @@ describe('WebStoreClient errors', () => {
       error: { message: 'denied', status: 'PERMISSION_DENIED' },
     });
     expect(error.code).toBe('EWEBSTOREPERMISSION');
-    expect(error.message).toMatch(/member of the publisher/);
+    expect(error.message).toMatch(MEMBER_OF_PUBLISHER);
   });
 
   it('explains a 404 as a wrong id or a missing draft', async () => {
     const error = await failing(404, { error: { message: 'not found' } });
     expect(error.code).toBe('EWEBSTORENOTFOUND');
-    expect(error.message).toMatch(/draft/);
+    expect(error.message).toMatch(MENTIONS_DRAFT);
   });
 
   it('handles other statuses and non JSON bodies', async () => {
@@ -358,10 +367,12 @@ describe('WebStoreClient promotion, cancel and rollback', () => {
     const client = make();
     await client.cancelSubmission();
     await client.setPublishedDeployPercentage(40);
+    // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
     await client.rollback({ rollbackReason: 'r', newVersion: '2' });
     expect(calls.map((c) => [c.url.split(':').pop(), c.body])).toEqual([
       ['cancelSubmission', {}],
       ['setPublishedDeployPercentage', { deployPercentage: 40 }],
+      // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
       ['rollback', { rollbackReason: 'r', newVersion: '2' }],
     ]);
     expect(
@@ -503,7 +514,9 @@ describe('auth', () => {
         GOOGLE_CLIENT_ID: 'id',
       }).catch((error: unknown) => error as AggregateError);
       expect(
-        (failure as AggregateError).errors.map((e: { code: string }) => e.code),
+        (failure as AggregateError).errors.map(
+          (error: { code: string }) => error.code,
+        ),
       ).toEqual(['EGOOGLECLIENTSECRET', 'EGOOGLEREFRESHTOKEN']);
     });
 
@@ -703,7 +716,7 @@ describe('auth', () => {
         }),
       );
       expect(failure.code).toBe('EAUTH');
-      expect(failure.message).not.toMatch(/TOPSECRET|REFRESH/);
+      expect(failure.message).not.toMatch(SECRET_TOKEN_NAMES);
     });
 
     it('signs a service account assertion Google can verify', async () => {
@@ -1018,7 +1031,7 @@ describe('request over a real socket', () => {
         {},
         { retries: 1, attemptTimeoutMs: 1000, minTimeout: 1 },
       ),
-    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    ).rejects.toThrow(LOOPBACK_NETWORK_ERROR);
     expect(seen).toHaveLength(2);
   }, 15_000);
 
@@ -1026,7 +1039,7 @@ describe('request over a real socket', () => {
     const { url } = await serve(() => undefined);
     const started = Date.now();
     await expect(request(`${url}/a`, {}, { deadlineMs: 1000 })).rejects.toThrow(
-      /aborted due to timeout/,
+      ABORTED_DUE_TO_TIMEOUT,
     );
     expect(Date.now() - started).toBeLessThan(2000);
   }, 15_000);
@@ -1043,7 +1056,7 @@ describe('request over a real socket', () => {
         { method: 'POST', body: 'a=1' },
         { retries: 2, retryPost: true, minTimeout: 1 },
       ),
-    ).rejects.toThrow(/other side closed/);
+    ).rejects.toThrow(OTHER_SIDE_CLOSED);
     expect(seen).toEqual(['POST /a', 'POST /a', 'POST /a']);
   }, 15_000);
 
@@ -1074,7 +1087,7 @@ describe('request over a real socket', () => {
     });
     await expect(
       request(`${url}/a`, { method: 'POST', body: 'a=1' }, { retries: 3 }),
-    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    ).rejects.toThrow(LOOPBACK_NETWORK_ERROR);
     expect(seen).toHaveLength(1);
   });
 
@@ -1085,7 +1098,7 @@ describe('request over a real socket', () => {
     });
     await expect(
       request(`${url}/a`, {}, { retries: 2, minTimeout: 1 }),
-    ).rejects.toThrow(/Network error calling 127\.0\.0\.1/);
+    ).rejects.toThrow(LOOPBACK_NETWORK_ERROR);
     expect(seen).toHaveLength(1);
   });
 
@@ -1160,7 +1173,7 @@ describe('request over a real socket', () => {
           {},
           { retries: 1, deadlineMs: 1500, minTimeout: 1 },
         ),
-      ).rejects.toThrow(/Network error calling something\.invalid/);
+      ).rejects.toThrow(INVALID_HOST_NETWORK_ERROR);
       expect(Date.now() - started).toBeLessThan(4000);
       const connects = proxy.connects();
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -1324,6 +1337,7 @@ describe('client', () => {
       await rollback({
         ...base,
         rollbackReason: 'crash on start',
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         newVersion: '1.2.1',
         targetCrxVersion: '1.1.0',
         validateOnly: true,
@@ -1331,6 +1345,7 @@ describe('client', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0].body).toEqual({
         rollbackReason: 'crash on start',
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         newVersion: '1.2.1',
         targetCrxVersion: '1.1.0',
         validateOnly: true,
@@ -1343,10 +1358,12 @@ describe('client', () => {
       await rollback({
         ...base,
         rollbackReason: 'bad',
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         newVersion: '2.0.1',
       });
       expect(calls[0].body).toEqual({
         rollbackReason: 'bad',
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         newVersion: '2.0.1',
       });
     });
@@ -1354,9 +1371,11 @@ describe('client', () => {
     it('requires a reason and a new version before any request', async () => {
       const calls = mockHttp({});
       await expect(
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         rollback({ ...base, rollbackReason: ' ', newVersion: '1' }),
       ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
       await expect(
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         rollback({ ...base, rollbackReason: 'x', newVersion: '' }),
       ).rejects.toMatchObject({ code: 'EINVALIDROLLBACK' });
       expect(calls).toHaveLength(0);
@@ -1370,6 +1389,7 @@ describe('client', () => {
         },
       });
       await expect(
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         rollback({ ...base, rollbackReason: 'x', newVersion: '1.0.0' }),
       ).rejects.toMatchObject({
         code: 'EWEBSTOREBADREQUEST',
@@ -1384,6 +1404,7 @@ describe('client', () => {
           ...base,
           env: {},
           rollbackReason: 'x',
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
           newVersion: '1.0.1',
         }),
       ).rejects.toMatchObject({ code: 'ENOCREDENTIALS' });
@@ -1396,6 +1417,7 @@ describe('client', () => {
       const failure = (await rollback({
         ...base,
         rollbackReason: 'x',
+        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
         newVersion: '1.0.1',
       }).catch((error: unknown) => error)) as Error;
       expect(failure.message).not.toContain('SECRET-TOKEN');
