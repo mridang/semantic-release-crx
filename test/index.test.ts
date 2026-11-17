@@ -1,7 +1,14 @@
-import { loadFixture } from './utils/fixtures.js';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import loadPlugins from 'semantic-release/lib/plugins/index.js';
+import {
+  addChannel,
+  prepare,
+  publish,
+  verifyConditions,
+} from '../src/index.js';
+import { loadFixture } from './utils/fixtures.js';
 import { mockHttp } from './utils/http-mock.js';
 import {
   BASE,
@@ -21,34 +28,28 @@ import type {
   PublishContext,
   VerifyConditionsContext,
 } from 'semantic-release';
-import {
-  addChannel,
-  prepare,
-  publish,
-  verifyConditions,
-} from '../src/index.js';
-import loadPlugins from 'semantic-release/lib/plugins/index.js';
 
 /** Locale-aware comparer, built once. */
 const collator = new Intl.Collator();
-const SKIPPING_VERIFICATION = /Skipping verification/;
-const TAKEN_DOWN = /taken down/;
-const POLICY_WARNING = /policy warning/;
-const WROTE_ZIPPED_FILES = /Wrote zipped file with 2 files/;
-const STATE_PENDING_REVIEW = /state PENDING_REVIEW/;
-const SKIPPING_PUBLISH_STEP = /skipping publish step/;
-const SKIPPING_THE_PUBLISH_STEP = /skipping the publish step/;
-const DISTRIBUTION_SETTINGS = /Distribution settings/;
-const PRE_RELEASE = /pre-release/;
-const CANCELLING = /Cancelling/;
-const PENDING_REVIEW_CANCEL = /still pending review.*cancelPendingSubmission/;
-const PENDING_SUBMISSION_CHECK = /Could not check for a pending submission/;
-const TARGET_LARGER_THAN_CURRENT = /larger than the current target.*10,000/;
+const SKIPPING_VERIFICATION = /Skipping verification/u;
+const TAKEN_DOWN = /taken down/u;
+const POLICY_WARNING = /policy warning/u;
+const WROTE_ZIPPED_FILES = /Wrote zipped file with 2 files/u;
+const STATE_PENDING_REVIEW = /state PENDING_REVIEW/u;
+const SKIPPING_PUBLISH_STEP = /skipping publish step/u;
+const SKIPPING_THE_PUBLISH_STEP = /skipping the publish step/u;
+const DISTRIBUTION_SETTINGS = /Distribution settings/u;
+const PRE_RELEASE = /pre-release/u;
+const CANCELLING = /Cancelling/u;
+const PENDING_REVIEW_CANCEL = /still pending review.*cancelPendingSubmission/u;
+const PENDING_SUBMISSION_CHECK = /Could not check for a pending submission/u;
+const TARGET_LARGER_THAN_CURRENT = /larger than the current target.*10,000/u;
 
 const versions = await loadFixture('manifest-versions.json');
 
 // Undefined without writing undefined: a spread then overrides the default with undefined.
-let unset: undefined;
+// eslint-disable-next-line sonarjs/no-undefined-assignment -- the tests need an explicit undefined that overrides a default
+const unset = undefined;
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -404,6 +405,7 @@ describe('prepare', () => {
     it('renders the asset template and zips the manifest it just wrote', async () => {
       await withTmp(files, async (dir) => {
         await run(dir, {
+          // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
           asset: 'out/${branch.name}-${nextRelease.version}.zip',
         }).result;
         const entries = await unzip(
@@ -492,6 +494,7 @@ describe('prepare', () => {
           dir,
           {
             asset:
+              // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
               '<%= lastRelease.version %>-${nextRelease.version}-${commits.length}.zip',
           },
           { lastRelease: { version: '1.0.0' }, commits: [{}, {}] },
@@ -512,6 +515,7 @@ describe('prepare', () => {
     it('reports EINVALIDASSET when the template cannot be evaluated', async () => {
       await withTmp(files, async (dir) => {
         await expect(
+          // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
           run(dir, { asset: '${nope.version}.zip' }).result,
         ).rejects.toMatchObject({
           code: 'EINVALIDASSET',
@@ -564,7 +568,7 @@ describe('publish', () => {
           url: 'https://chromewebstore.google.com/detail/ext-1',
         });
         expect(
-          calls.map((c) => c.method + ' ' + c.url.split('/').pop()),
+          calls.map((c) => `${c.method} ${c.url.split('/').pop()}`),
         ).toEqual([
           'GET ext-1:fetchStatus',
           'POST ext-1:upload',
@@ -929,6 +933,7 @@ describe('publish', () => {
           [PUBLISH]: { json: { state: 'PUBLISHED' } },
         });
         expect(
+          // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
           await run(dir, { asset: 'chrome-${branch.name}.zip' }).result,
         ).toMatchObject({ name: 'Chrome Web Store' });
       });
@@ -1139,6 +1144,7 @@ describe('publish', () => {
     it('reports EINVALIDASSET when the template cannot be evaluated', async () => {
       mockHttp({});
       await expect(
+        // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
         run('/nowhere', { asset: '${nope.version}.zip' }).result,
       ).rejects.toMatchObject({
         code: 'EINVALIDASSET',
@@ -1275,6 +1281,7 @@ describe('addChannel', () => {
         ).result;
         expect(calls[0].headers.authorization).toBe('Bearer ENV-TOKEN');
       } finally {
+        // eslint-disable-next-line require-atomic-updates -- restores the environment after the awaited work
         process.env = saved;
       }
     });

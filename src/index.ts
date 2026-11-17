@@ -3,12 +3,6 @@ import path from 'node:path';
 // eslint-disable-next-line e18e/ban-dependencies -- lodash template compiles the <%= %> syntax, which has no identical native replacement
 import template from 'lodash/template.js';
 import SemanticReleaseError from '@semantic-release/error';
-import type {
-  AddChannelContext,
-  PrepareContext,
-  PublishContext,
-  VerifyConditionsContext,
-} from 'semantic-release';
 import { Extension } from './extension.js';
 import {
   DEFAULT_DIST_FOLDER,
@@ -18,12 +12,18 @@ import {
   resolveExtensionId,
   resolvePublisherId,
   validateConfig,
-  type CrxPluginConfig,
 } from './plugin-config.js';
 import { codeOf, messageOf } from './utils/error.js';
 import { isRecord } from './utils/object.js';
 import { toManifestVersion } from './version.js';
 import { resolveCredentials, WebStoreClient } from './webstore.js';
+import type { CrxPluginConfig } from './plugin-config.js';
+import type {
+  AddChannelContext,
+  PrepareContext,
+  PublishContext,
+  VerifyConditionsContext,
+} from 'semantic-release';
 
 export type {
   CrxPluginConfig,
@@ -248,18 +248,23 @@ async function handlePendingSubmission(
  * pending submission that was left in place.
  * @param error - The error raised by the store call.
  * @param config - Plugin configuration.
- * @returns The error to throw: the original, or a copy whose message carries
- * the hint.
+ * @param pending - Whether a pending submission was left in place.
+ * @throws The original error, or a copy whose message carries the hint.
  */
-function withPendingHint(error: unknown, config: CrxPluginConfig): unknown {
+function rethrowWithPendingHint(
+  error: unknown,
+  config: CrxPluginConfig,
+  pending: boolean,
+): never {
   if (
+    !pending ||
     config.cancelPendingSubmission ||
     !(error instanceof Error) ||
     error instanceof AggregateError
   ) {
-    return error;
+    throw error;
   }
-  return new SemanticReleaseError(
+  throw new SemanticReleaseError(
     `${error.message} A submission was pending review: set cancelPendingSubmission to true to cancel it before publishing.`,
     codeOf(error) ?? 'EWEBSTORE',
   );
@@ -349,9 +354,9 @@ export async function publish(
   });
   const pending = await handlePendingSubmission(config, client, logger);
   logger.log('Uploading zip file to the Chrome Web Store...');
-  const uploaded = await client.upload(zip).catch((error: unknown) => {
-    throw pending ? withPendingHint(error, config) : error;
-  });
+  const uploaded = await client
+    .upload(zip)
+    .catch((error: unknown) => rethrowWithPendingHint(error, config, pending));
   logger.log(
     `Successfully uploaded extension to the Chrome Web Store${
       uploaded.crxVersion ? ` (version ${uploaded.crxVersion})` : ''
@@ -388,9 +393,7 @@ export async function publish(
         failOnWarnings: Boolean(failOnWarnings),
       },
     )
-    .catch((error: unknown) => {
-      throw pending ? withPendingHint(error, config) : error;
-    });
+    .catch((error: unknown) => rethrowWithPendingHint(error, config, pending));
   logger.log(
     `Successfully published extension to the Chrome Web Store (state ${state})`,
   );

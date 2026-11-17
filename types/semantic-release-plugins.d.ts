@@ -3,7 +3,9 @@
  * typings, so the part the tests use is declared here once.
  */
 declare module 'semantic-release/lib/plugins/index.js' {
-  type Step = (context: Record<string, unknown>) => Promise<unknown>;
+  type Step = (
+    context: Record<string, unknown>,
+  ) => Promise<readonly Record<string, unknown>[]>;
 
   const loadPlugins: (
     context: Record<string, unknown>,

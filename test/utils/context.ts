@@ -10,6 +10,7 @@ export const TOKEN = 'POST https://oauth2.googleapis.com/token';
 export const CONFIG = {
   extensionId: 'ext-1',
   publisherId: 'pub-1',
+  // eslint-disable-next-line no-template-curly-in-string -- the plugin expands this template itself
   asset: 'ext-v${nextRelease.version}.zip',
   pollIntervalMs: 1,
   pollTimeoutMs: 100,
@@ -20,12 +21,7 @@ export const CONFIG = {
  * @param extra - Properties to add or override.
  * @returns The context and the lines logged through it.
  */
-export function stepContext(extra: Record<string, unknown> = {}): {
-  context: Record<string, unknown> & {
-    logger: ReturnType<typeof recordingLogger>['logger'];
-  };
-  lines: string[];
-} {
+export function stepContext(extra: Record<string, unknown> = {}) {
   const { logger, lines } = recordingLogger();
   return {
     lines,

@@ -1,10 +1,10 @@
 import { inspect } from 'node:util';
-import type { VerifyConditionsContext } from 'semantic-release';
 import SemanticReleaseError from '@semantic-release/error';
 import { readEnv } from './utils/env.js';
 import { isPercentage } from './utils/math.js';
 import { isRecord } from './utils/object.js';
 import { isOneOf } from './utils/union.js';
+import type { VerifyConditionsContext } from 'semantic-release';
 
 const PUBLISH_TARGETS = [
   'default',

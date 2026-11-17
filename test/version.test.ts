@@ -1,11 +1,11 @@
-import { loadFixture } from './utils/fixtures.js';
 import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { toManifestVersion } from '../src/version.js';
+import { loadFixture } from './utils/fixtures.js';
 
-const NOT_A_VALID_SEMANTIC = /not a valid semantic/;
-const NO_NUMERIC_IDENTIFIER = /no numeric/;
-const MAX_COMPONENT_VALUE = /65535/;
+const NOT_A_VALID_SEMANTIC = /not a valid semantic/u;
+const NO_NUMERIC_IDENTIFIER = /no numeric/u;
+const MAX_COMPONENT_VALUE = /65535/u;
 
 const versions = await loadFixture('manifest-versions.json');
 

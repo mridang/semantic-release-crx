@@ -1,21 +1,21 @@
-import { loadFixture } from './utils/fixtures.js';
-import { describe, expect, it } from '@jest/globals';
 import { readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { Extension } from '../src/extension.js';
 import { isRecord } from '../src/utils/object.js';
+import { loadFixture } from './utils/fixtures.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
 
 /** Locale-aware comparer, built once. */
 const collator = new Intl.Collator();
-const BARE_LINE_FEED = /[^\r]\n/;
-const WROTE_VERSION_1_0_0 = /^Wrote version 1\.0\.0 to /;
+const BARE_LINE_FEED = /[^\r]\n/u;
+const WROTE_VERSION_1_0_0 = /^Wrote version 1\.0\.0 to /u;
 const WROTE_RC_VERSION =
-  /^Wrote version 1\.0\.0\.2 \(version_name 1\.0\.0-rc\.2\) to /;
+  /^Wrote version 1\.0\.0\.2 \(version_name 1\.0\.0-rc\.2\) to /u;
 
 const versions = await loadFixture('manifest-versions.json');
 
@@ -352,6 +352,7 @@ describe('Extension.zip', () => {
       if (saved === undefined) {
         delete process.env.TZ;
       } else {
+        // eslint-disable-next-line require-atomic-updates -- restores the variable after the awaited work
         process.env.TZ = saved;
       }
     }

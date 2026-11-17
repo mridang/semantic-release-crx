@@ -10,7 +10,7 @@ describe('readEnv', () => {
   it('treats unset and blank as undefined', () => {
     expect(readEnv({}, 'A')).toBeUndefined();
     expect(readEnv({ A: '  \n' }, 'A')).toBeUndefined();
-    let missing: string | undefined;
-    expect(readEnv({ A: missing }, 'A')).toBeUndefined();
+    // eslint-disable-next-line sonarjs/no-undefined-assignment -- an explicit undefined value is what is being tested
+    expect(readEnv({ A: undefined }, 'A')).toBeUndefined();
   });
 });

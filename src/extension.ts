@@ -2,16 +2,18 @@
  * @file Builds the Chrome extension folder on disk: writes its version and zips it.
  */
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import type { Stats } from 'node:fs';
 import nodePath from 'node:path';
-import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
-import { zip, type AsyncZippable, type ZipOptions } from 'fflate';
 import { promisify } from 'node:util';
+import { applyEdits, modify, parse } from 'jsonc-parser';
+import { zip } from 'fflate';
 import SemanticReleaseError from '@semantic-release/error';
 import { messageOf } from './utils/error.js';
 import { isRecord } from './utils/object.js';
 import { toPosixPath } from './utils/path.js';
 import { toManifestVersion } from './version.js';
+import type { AsyncZippable, ZipOptions } from 'fflate';
+import type { ParseError } from 'jsonc-parser';
+import type { Stats } from 'node:fs';
 
 type ZipWithOptions = (
   data: AsyncZippable,
@@ -171,17 +173,17 @@ export class Extension {
     const found = await Promise.all(
       entries.map(async (entry): Promise<readonly string[]> => {
         const path = nodePath.join(entry.parentPath, entry.name);
-        let kind: EntryKind = entry.isFile() ? 'file' : 'other';
-        if (entry.isSymbolicLink()) {
-          kind = await stat(path)
-            .then(kindOfInfo)
-            .catch(() => {
-              throw new SemanticReleaseError(
-                `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
-                'EBROKENSYMLINK',
-              );
-            });
-        }
+        const direct: EntryKind = entry.isFile() ? 'file' : 'other';
+        const kind: EntryKind = entry.isSymbolicLink()
+          ? await stat(path)
+              .then(kindOfInfo)
+              .catch(() => {
+                throw new SemanticReleaseError(
+                  `The distFolder contains a broken symbolic link: "${path}". Remove it or fix its target before zipping.`,
+                  'EBROKENSYMLINK',
+                );
+              })
+          : direct;
         if (kind === 'directory') {
           throw new SemanticReleaseError(
             `The distFolder contains a symbolic link to a folder: "${path}". Its files would be left out of the zip, so replace the link with a real copy before zipping.`,
