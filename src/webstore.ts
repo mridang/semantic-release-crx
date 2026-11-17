@@ -1,12 +1,8 @@
 import { readFile } from 'node:fs/promises';
+// eslint-disable-next-line tslop/no-renamed-imports -- setTimeout would shadow the global timer function
 import { setTimeout as sleep } from 'node:timers/promises';
 import SemanticReleaseError from '@semantic-release/error';
-import {
-  EnvHttpProxyAgent,
-  RetryAgent,
-  request as send,
-  type Dispatcher,
-} from 'undici';
+import { EnvHttpProxyAgent, RetryAgent, request as send } from 'undici';
 import { fromBase64 } from './utils/base64.js';
 import { codeOf, messageOf } from './utils/error.js';
 import { readEnv } from './utils/env.js';
@@ -15,6 +11,7 @@ import { isPercentage } from './utils/math.js';
 import { booleanAt, isRecord, numberAt, stringAt } from './utils/object.js';
 import { isOneOf } from './utils/union.js';
 import { nowSeconds } from './utils/time.js';
+import type { Dispatcher } from 'undici';
 
 /**
  * What a call to the store came back with, with the body already read.
@@ -214,18 +211,27 @@ function markBodyFailures(
   };
 }
 
+/** A value that `JSON.parse` can produce. */
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
 /**
  * Decode a response body.
  * @param text The body as text.
  * @returns The parsed JSON, undefined for an empty body, else the first 500
  * characters of the text.
  */
-function decodeBody(text: string): unknown {
+function decodeBody(text: string): JsonValue | undefined {
   if (text === '') {
     return undefined;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as JsonValue;
   } catch {
     return text.slice(0, 500);
   }
@@ -506,7 +512,7 @@ export async function request(
       ...(location === undefined ? {} : { location }),
     };
   };
-  const expired = new Promise<never>((_resolve, reject) =>
+  const expired = new Promise<never>((_resolve, reject) => {
     deadline.addEventListener(
       'abort',
       () => {
@@ -516,8 +522,8 @@ export async function request(
         reject(deadline.reason);
       },
       { once: true, signal: finished.signal },
-    ),
-  );
+    );
+  });
   const attempt = exchange(retries, target, MAX_REDIRECTIONS);
   attempt.catch(() => undefined);
   try {
@@ -590,19 +596,21 @@ async function readServiceAccount(
     inline === undefined
       ? 'GOOGLE_APPLICATION_CREDENTIALS'
       : 'GOOGLE_SERVICE_ACCOUNT_KEY';
-  let raw: string | undefined;
-  if (inline !== undefined) {
-    raw = inline.startsWith('{') ? inline : fromBase64(inline);
-  } else if (path === undefined) {
-    // Neither variable is set, so there is no file or inline key to read.
-  } else {
-    raw = await readFile(path, 'utf8').catch(() => {
+  const raw = await (async (): Promise<string | undefined> => {
+    if (inline !== undefined) {
+      return inline.startsWith('{') ? inline : fromBase64(inline);
+    }
+    if (path === undefined) {
+      // Neither variable is set, so there is no file or inline key to read.
+      return undefined;
+    }
+    return readFile(path, 'utf8').catch(() => {
       throw new SemanticReleaseError(
         `GOOGLE_APPLICATION_CREDENTIALS points at a file that cannot be read.`,
         'ESERVICEACCOUNT',
       );
     });
-  }
+  })();
   if (raw === undefined) {
     return undefined;
   }
@@ -674,15 +682,16 @@ export async function resolveCredentials(env: Env): Promise<Credentials> {
   ] as const;
   if (clientId || clientSecret || refreshToken) {
     throw new AggregateError(
-      missing
-        .filter(([value]) => !value)
-        .map(
-          ([, name, code]) =>
-            new SemanticReleaseError(
-              `Environment variable not found: ${name}. Check the README.md for config info.`,
-              code,
-            ),
-        ),
+      missing.flatMap(([value, name, code]) =>
+        value
+          ? []
+          : [
+              new SemanticReleaseError(
+                `Environment variable not found: ${name}. Check the README.md for config info.`,
+                code,
+              ),
+            ],
+      ),
       'Chrome Web Store credentials are incomplete.',
     );
   }
@@ -1019,24 +1028,36 @@ type Action =
   | 'deploy percentage update'
   | 'rollback';
 
-const HINTS: Readonly<Record<number, readonly [string, string]>> = {
-  400: [
-    'EWEBSTOREBADREQUEST',
-    'Open the item in the Chrome Web Store Developer Dashboard and fix anything it reports: the Store listing, Privacy and Distribution tabs must be complete, the manifest version must be higher than the published one, and an item with a submission already in review cannot be updated.',
+const HINTS = new Map<number, readonly [string, string]>([
+  [
+    400,
+    [
+      'EWEBSTOREBADREQUEST',
+      'Open the item in the Chrome Web Store Developer Dashboard and fix anything it reports: the Store listing, Privacy and Distribution tabs must be complete, the manifest version must be higher than the published one, and an item with a submission already in review cannot be updated.',
+    ],
   ],
-  401: [
-    'EWEBSTOREAUTH',
-    'The access token was rejected. It may have expired (they last about an hour): obtain it right before the release, or use a refresh token or service account instead.',
+  [
+    401,
+    [
+      'EWEBSTOREAUTH',
+      'The access token was rejected. It may have expired (they last about an hour): obtain it right before the release, or use a refresh token or service account instead.',
+    ],
   ],
-  403: [
-    'EWEBSTOREPERMISSION',
-    'The account behind the credentials is not allowed to manage this item. Add the service account or Google account as a member of the publisher, check the publisherId, and make sure the Chrome Web Store API is enabled in the Google Cloud project.',
+  [
+    403,
+    [
+      'EWEBSTOREPERMISSION',
+      'The account behind the credentials is not allowed to manage this item. Add the service account or Google account as a member of the publisher, check the publisherId, and make sure the Chrome Web Store API is enabled in the Google Cloud project.',
+    ],
   ],
-  404: [
-    'EWEBSTORENOTFOUND',
-    'The item was not found. Check publisherId and extensionId. The item must already exist (create a draft in the Developer Dashboard first).',
+  [
+    404,
+    [
+      'EWEBSTORENOTFOUND',
+      'The item was not found. Check publisherId and extensionId. The item must already exist (create a draft in the Developer Dashboard first).',
+    ],
   ],
-};
+]);
 
 const ACTION_HINTS: Readonly<Partial<Record<Action, string>>> = {
   'cancel submission':
@@ -1076,7 +1097,7 @@ function failure(action: Action, result: HttpResult): SemanticReleaseError {
       'EWEBSTOREHTTP',
     );
   }
-  const [code, hint] = HINTS[result.status] ?? [
+  const [code, hint] = HINTS.get(result.status) ?? [
     'EWEBSTOREHTTP',
     'Check the Chrome Web Store status and the Developer Dashboard.',
   ];
@@ -1128,9 +1149,7 @@ export class WebStoreClient {
     });
   }
 
-  private headers(
-    extra: Readonly<Record<string, string>> = {},
-  ): Readonly<Record<string, string>> {
+  private headers(extra: Readonly<Record<string, string>> = {}) {
     return { Authorization: `Bearer ${this.options.accessToken}`, ...extra };
   }
 
@@ -1290,10 +1309,12 @@ export class WebStoreClient {
   ): Promise<ItemState> {
     const result = await this.publish(body);
     const warnings = result.warningInfo?.warnings ?? [];
-    for (const warning of warnings)
+    // eslint-disable-next-line functional/no-loop-statements -- reports every warning in order
+    for (const warning of warnings) {
       this.options.log?.(
         `${warning.reason ?? 'WARNING'}: ${warning.description ?? ''}`,
       );
+    }
     const blocking = warnings.filter(
       (warning) => !policy.ignoredWarnings.includes(warning.reason ?? ''),
     );
@@ -1321,7 +1342,10 @@ export class WebStoreClient {
   private async postJson(
     action: Action,
     operation: string,
-    body: object,
+    body:
+      | RollbackRequest
+      | { readonly deployPercentage: number }
+      | Readonly<Record<string, never>>,
   ): Promise<void> {
     await this.call(
       action,

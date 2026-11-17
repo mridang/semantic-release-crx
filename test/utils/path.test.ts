@@ -1,5 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
 import path from 'node:path';
+import { describe, expect, it } from '@jest/globals';
 // noinspection ES6PreferShortImport
 import { toPosixPath } from '../../src/utils/path.js';
 

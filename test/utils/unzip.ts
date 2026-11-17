@@ -3,8 +3,10 @@ import { inflateRawAsync } from './zlib.js';
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
   let c = n;
   for (let k = 0; k < 8; k++) {
+    // eslint-disable-next-line no-bitwise -- CRC-32 is defined with bit operations
     c = c & 1 ? 0xed_b8_83_20 ^ (c >>> 1) : c >>> 1;
   }
+  // eslint-disable-next-line no-bitwise -- CRC-32 is defined with bit operations
   return c >>> 0;
 });
 
@@ -16,8 +18,10 @@ const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
 export function crc32(data: Uint8Array): number {
   let crc = 0xff_ff_ff_ff;
   for (const byte of data) {
+    // eslint-disable-next-line no-bitwise -- CRC-32 is defined with bit operations
     crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
   }
+  // eslint-disable-next-line no-bitwise -- CRC-32 is defined with bit operations
   return (crc ^ 0xff_ff_ff_ff) >>> 0;
 }
 

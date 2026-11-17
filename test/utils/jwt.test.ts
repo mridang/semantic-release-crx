@@ -1,8 +1,8 @@
-import { describe, expect, it } from '@jest/globals';
 import { createPublicKey, createVerify } from 'node:crypto';
+import { describe, expect, it } from '@jest/globals';
+import { signJwt } from '../../src/utils/jwt.js';
 import { generateKeyPairAsync } from './crypto.js';
 // noinspection ES6PreferShortImport
-import { signJwt } from '../../src/utils/jwt.js';
 
 const { privateKey, publicKey } = await generateKeyPairAsync('rsa', {
   modulusLength: 2048,

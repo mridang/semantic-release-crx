@@ -1,37 +1,36 @@
-import { loadFixture } from './utils/fixtures.js';
+import { inspect } from 'node:util';
+import { createPublicKey, createVerify } from 'node:crypto';
+import path from 'node:path';
+import { MockAgent } from 'undici';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   WebStoreClient,
-  type RequestOptions,
   getAccessToken,
   request,
   resolveCredentials,
-} from '../src/webstore.js';
-import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
-import { startTunnelProxy } from './utils/proxy.js';
-import { listen, startFaultyProxy } from './utils/server.js';
-import { inspect } from 'node:util';
-import { MockAgent } from 'undici';
-import { createPublicKey, createVerify } from 'node:crypto';
-import { generateKeyPairAsync } from './utils/crypto.js';
-import path from 'node:path';
-import { withTmp } from './utils/tmpdir.js';
-import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
-import {
   cancelSubmission,
   fetchStatus,
   rollback,
   setPublishedDeployPercentage,
 } from '../src/webstore.js';
+import { codeOf } from '../src/utils/error.js';
+import { generateKeyPairAsync } from './utils/crypto.js';
+import { withTmp } from './utils/tmpdir.js';
+import { listen, startFaultyProxy } from './utils/server.js';
+import { startTunnelProxy } from './utils/proxy.js';
+import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
+import { loadFixture } from './utils/fixtures.js';
+import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
+import type { RequestOptions } from '../src/webstore.js';
 
-const BEING_PROCESSED = /being processed/;
-const MEMBER_OF_PUBLISHER = /member of the publisher/;
-const MENTIONS_DRAFT = /draft/;
-const SECRET_TOKEN_NAMES = /TOPSECRET|REFRESH/;
-const LOOPBACK_NETWORK_ERROR = /Network error calling 127\.0\.0\.1/;
-const ABORTED_DUE_TO_TIMEOUT = /aborted due to timeout/;
-const OTHER_SIDE_CLOSED = /other side closed/;
-const INVALID_HOST_NETWORK_ERROR = /Network error calling something\.invalid/;
+const BEING_PROCESSED = /being processed/u;
+const MEMBER_OF_PUBLISHER = /member of the publisher/u;
+const MENTIONS_DRAFT = /draft/u;
+const SECRET_TOKEN_NAMES = /TOPSECRET|REFRESH/u;
+const LOOPBACK_NETWORK_ERROR = /Network error calling 127\.0\.0\.1/u;
+const ABORTED_DUE_TO_TIMEOUT = /aborted due to timeout/u;
+const OTHER_SIDE_CLOSED = /other side closed/u;
+const INVALID_HOST_NETWORK_ERROR = /Network error calling something\.invalid/u;
 
 const urls = await loadFixture('insecure-urls.json');
 
@@ -310,14 +309,13 @@ describe('WebStoreClient.publish', () => {
 });
 
 describe('WebStoreClient polling edge cases', () => {
-  const polling = (status: unknown, extra: Record<string, unknown> = {}) => {
-    return mockHttp({
+  const polling = (status: unknown, extra: Record<string, unknown> = {}) =>
+    mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
       [STATUS]: status as never,
       [PUBLISH]: { json: { state: 'PUBLISHED' } },
       ...extra,
     });
-  };
   const published = (calls: { url: string }[]) =>
     calls.some((c) => c.url.endsWith(':publish'));
 
@@ -404,9 +402,12 @@ describe('WebStoreClient.hasPendingSubmission', () => {
         { json: {} },
       ],
     });
-    expect(await make().hasPendingSubmission()).toBe(true);
-    expect(await make().hasPendingSubmission()).toBe(false);
-    expect(await make().hasPendingSubmission()).toBe(false);
+    const answers = [
+      await make().hasPendingSubmission(),
+      await make().hasPendingSubmission(),
+      await make().hasPendingSubmission(),
+    ];
+    expect(answers).toEqual([true, false, false]);
   });
 });
 
@@ -697,12 +698,16 @@ describe('auth', () => {
         clientSecret: 's',
         refreshToken: 'r',
       } as const;
-      await expect(tokenFor(credentials)).rejects.toMatchObject({
-        code: 'EAUTH',
-      });
-      await expect(tokenFor(credentials)).rejects.toMatchObject({
-        code: 'EAUTH',
-      });
+      const codeOfFailure = async (): Promise<string | undefined> => {
+        try {
+          await tokenFor(credentials);
+          return 'resolved';
+        } catch (error: unknown) {
+          return codeOf(error);
+        }
+      };
+      const codes = [await codeOfFailure(), await codeOfFailure()];
+      expect(codes).toEqual(['EAUTH', 'EAUTH']);
     });
 
     it('reports a network failure without leaking the request', async () => {
@@ -922,6 +927,7 @@ describe('request', () => {
       expect(shown).not.toContain('PW-SECRET');
       expect(shown).toContain('HTTPS_PROXY');
     } finally {
+      // eslint-disable-next-line require-atomic-updates -- restores the environment after the awaited work
       process.env = saved;
     }
   });
@@ -1127,8 +1133,9 @@ describe('request over a real socket', () => {
       `http://localhost:${server.port}/a?token=SECRET`,
       { headers: { Authorization: 'Bearer SECRET' } },
     ).catch((error: unknown) => error);
-    expect(String(failure)).toContain('ECONNREFUSED');
-    expect(String(failure)).not.toContain('SECRET');
+    const shown = String(failure);
+    expect(shown).toContain('ECONNREFUSED');
+    expect(shown).not.toContain('SECRET');
   });
 
   it('goes through the proxy named by the environment', async () => {
@@ -1176,7 +1183,9 @@ describe('request over a real socket', () => {
       ).rejects.toThrow(INVALID_HOST_NETWORK_ERROR);
       expect(Date.now() - started).toBeLessThan(4000);
       const connects = proxy.connects();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
       expect(proxy.connects()).toBe(connects);
     },
     15_000,

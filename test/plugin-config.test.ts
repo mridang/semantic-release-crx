@@ -8,7 +8,7 @@ import {
 } from '../src/plugin-config.js';
 import type { VerifyConditionsContext } from 'semantic-release';
 
-const DEVELOPER_DASHBOARD = /Developer Dashboard/;
+const DEVELOPER_DASHBOARD = /Developer Dashboard/u;
 
 describe('manifestPathOf', () => {
   it('defaults to dist/manifest.json', () => {

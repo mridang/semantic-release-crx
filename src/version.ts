@@ -3,7 +3,7 @@
  */
 import SemanticReleaseError from '@semantic-release/error';
 
-const DIGITS_ONLY = /^\d+$/;
+const DIGITS_ONLY = /^\d+$/u;
 
 export interface ManifestVersion {
   /**
@@ -22,7 +22,7 @@ export interface ManifestVersion {
 }
 
 const SEMVER =
-  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
+  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 const MAX_PART = 65_535;
 
