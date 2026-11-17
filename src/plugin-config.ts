@@ -228,14 +228,19 @@ function isPositiveNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+/** A plugin configuration as it arrives from the user, before it is validated. */
+type UnvalidatedConfig = Readonly<
+  Partial<Record<keyof CrxPluginConfig, unknown>>
+>;
+
 /**
  * Validate the options that do not need the network.
- * @param config - Plugin configuration.
+ * @param config - Plugin configuration, as written by the user.
  * @param requireAsset - Whether `asset` is mandatory for this step.
  * @returns Every problem found, so they can be reported together.
  */
 export function validateConfig(
-  config: CrxPluginConfig,
+  config: UnvalidatedConfig,
   requireAsset: boolean,
 ): readonly Error[] {
   const {
@@ -273,7 +278,7 @@ export function validateConfig(
         ]
       : []),
     ...(['pollIntervalMs', 'pollTimeoutMs'] as const).flatMap((name) => {
-      const value: unknown = config[name];
+      const value = config[name];
       return value !== undefined && !isPositiveNumber(value)
         ? [
             new SemanticReleaseError(

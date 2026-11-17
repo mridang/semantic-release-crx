@@ -79,7 +79,7 @@ export async function verifyConditions(
   }
   const extension = resolveExtensionId(config, context);
   const publisher = resolvePublisherId(config, context);
-  const found = await resolveCredentials(env ?? process.env)
+  const found = await resolveCredentials(env)
     .then((credentials) => ({ credentials, errors: [] }))
     .catch((error: unknown) => ({
       credentials: null,
@@ -152,6 +152,7 @@ export async function prepare(
       'The Chrome Web Store plugin cannot run. See the errors it lists.',
     );
   }
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- semantic-release types nextRelease as always present, but a caller without it must get the clear missing-version error below, which a test covers
   const semver = context.nextRelease?.version;
   if (!semver) {
     throw new SemanticReleaseError(
@@ -301,6 +302,7 @@ export async function publish(
     logger.log('Target option is set to "local", skipping the publish step.');
     return undefined;
   }
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- semantic-release types nextRelease as always present, but a caller without it must skip cleanly instead of throwing
   const semver = nextRelease?.version;
   if (semver && prerelease === 'skip' && toManifestVersion(semver).prerelease) {
     logger.log(
@@ -343,7 +345,7 @@ export async function publish(
       'ENOASSETFILE',
     );
   });
-  const credentials = await resolveCredentials(env ?? process.env);
+  const credentials = await resolveCredentials(env);
   const client = await WebStoreClient.connect({
     publisherId: publisher.id,
     extensionId,
@@ -436,7 +438,7 @@ export async function addChannel(
     );
   }
   const extensionId = extension.id;
-  const credentials = await resolveCredentials(env ?? process.env);
+  const credentials = await resolveCredentials(env);
   const client = await WebStoreClient.connect({
     publisherId: publisher.id,
     extensionId,

@@ -231,6 +231,7 @@ function decodeBody(text: string): JsonValue | undefined {
     return undefined;
   }
   try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- JSON.parse can only produce the JSON values that JsonValue describes, and the repository has no schema library to validate them with
     return JSON.parse(text) as JsonValue;
   } catch {
     return text.slice(0, 500);
@@ -654,7 +655,9 @@ async function readServiceAccount(
  * @returns The credentials to authenticate with.
  * @throws An aggregate error naming everything that is missing.
  */
-export async function resolveCredentials(env: Env): Promise<Credentials> {
+export async function resolveCredentials(
+  env: Env = process.env,
+): Promise<Credentials> {
   const accessToken = readEnv(env, 'CHROME_ACCESS_TOKEN');
   if (accessToken) {
     return { kind: 'accessToken', accessToken };
@@ -1418,7 +1421,7 @@ async function connect(options: ConnectionOptions): Promise<WebStoreClient> {
   return WebStoreClient.connect({
     publisherId: options.publisherId,
     extensionId: options.extensionId,
-    credentials: await resolveCredentials(options.env ?? process.env),
+    credentials: await resolveCredentials(options.env),
     log: options.log,
   });
 }
@@ -1483,7 +1486,7 @@ export async function rollback(
   // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
   const { rollbackReason, newVersion, targetCrxVersion, validateOnly } =
     options;
-  // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name
+  // eslint-disable-next-line unicorn/no-keyword-prefix, @typescript-eslint/no-unnecessary-condition -- newVersion is a field of the public RollbackRequest and the Chrome Web Store API, so it keeps its name; the request is typed as required but plain JavaScript callers can omit both fields, so the guard stays
   if (!rollbackReason?.trim() || !newVersion?.trim()) {
     throw new SemanticReleaseError(
       'A rollback needs both rollbackReason and newVersion; newVersion must be higher than the currently published version.',

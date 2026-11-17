@@ -108,7 +108,8 @@ function decodeBody(body: unknown, headers: Record<string, string>): Decoded {
   if (typeof body === 'string') {
     return type?.includes('x-www-form-urlencoded')
       ? Object.fromEntries(new URLSearchParams(body))
-      : (JSON.parse(body) as Decoded);
+      : // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- JSON.parse can only produce JSON values, which Decoded covers, and the repository has no schema library to validate them with
+        (JSON.parse(body) as Decoded);
   }
   return body instanceof Uint8Array ? body : undefined;
 }
@@ -179,4 +180,17 @@ export function failHttp(origin: string, error: Error): () => number {
     .replyWithError(error)
     .persist();
   return () => mock.getCallHistory()?.calls().length ?? 0;
+}
+
+/**
+ * Read a recorded request body that must be raw bytes.
+ * @param body - The `body` of a recorded call.
+ * @returns The bytes.
+ * @throws When the body is not raw bytes.
+ */
+export function bytesOf(body: unknown): Uint8Array {
+  if (body instanceof Uint8Array) {
+    return body;
+  }
+  throw new TypeError('Expected the request body to be raw bytes');
 }

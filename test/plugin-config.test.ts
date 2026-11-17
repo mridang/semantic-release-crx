@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import { codeOf } from '../src/utils/error.js';
 import {
   DEFAULT_IGNORED_WARNINGS,
   manifestPathOf,
@@ -38,9 +39,6 @@ describe('settings', () => {
   const context = (
     extra: Partial<Pick<VerifyConditionsContext, 'branch' | 'env'>> = {},
   ): Partial<Pick<VerifyConditionsContext, 'branch' | 'env'>> => extra;
-
-  const codeOf = (error: Error): string =>
-    (error as Error & { code: string }).code;
 
   describe('resolveExtensionId', () => {
     it('uses a plain extensionId for every branch', () => {
@@ -124,8 +122,8 @@ describe('settings', () => {
       'rejects pollTimeoutMs %s so the wait stays bounded',
       (value) => {
         expect(
-          validateConfig({ pollTimeoutMs: value as never }, false).map(
-            (error) => codeOf(error),
+          validateConfig({ pollTimeoutMs: value }, false).map((error) =>
+            codeOf(error),
           ),
         ).toEqual(['EINVALIDPOLL']);
       },
@@ -135,8 +133,8 @@ describe('settings', () => {
       'rejects pollIntervalMs %s',
       (value) => {
         expect(
-          validateConfig({ pollIntervalMs: value as never }, false).map(
-            (error) => codeOf(error),
+          validateConfig({ pollIntervalMs: value }, false).map((error) =>
+            codeOf(error),
           ),
         ).toEqual(['EINVALIDPOLL']);
       },
@@ -175,8 +173,8 @@ describe('settings', () => {
     it('rejects unknown values and reports all problems together', () => {
       const problems = validateConfig(
         {
-          target: 'public' as never,
-          prerelease: 'maybe' as never,
+          target: 'public',
+          prerelease: 'maybe',
           deployPercentage: 101,
         },
         false,
