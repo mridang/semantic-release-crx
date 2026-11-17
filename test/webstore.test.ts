@@ -14,11 +14,13 @@ import {
   setPublishedDeployPercentage,
 } from '../src/webstore.js';
 import { codeOf } from '../src/utils/error.js';
+import { isRecord } from '../src/utils/object.js';
 import { generateKeyPairAsync } from './utils/crypto.js';
 import { withTmp } from './utils/tmpdir.js';
 import { listen, startFaultyProxy } from './utils/server.js';
 import { startTunnelProxy } from './utils/proxy.js';
-import { failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
+import { bytesOf, failHttp, mockAgent, mockHttp } from './utils/http-mock.js';
+import { codedRejectionOf, rejectionOf } from './utils/rejection.js';
 import { loadFixture } from './utils/fixtures.js';
 import { BASE, ITEM, PUBLISH, STATUS, UPLOAD } from './utils/context.js';
 import type { RequestOptions } from '../src/webstore.js';
@@ -44,16 +46,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-const failureOf = async (
-  promise: Promise<unknown>,
-): Promise<Error & { code: string }> => {
-  try {
-    await promise;
-  } catch (error) {
-    return error as Error & { code: string };
-  }
-  throw new Error('expected the promise to reject');
-};
+const failureOf = codedRejectionOf;
 
 const make = (lines: string[] = [], overrides = {}): WebStoreClient =>
   new WebStoreClient({
@@ -83,7 +76,7 @@ describe('WebStoreClient.upload', () => {
       authorization: 'Bearer SECRET-TOKEN',
       'content-type': 'application/zip',
     });
-    expect(Buffer.from(calls[0].body as Uint8Array).equals(zip)).toBe(true);
+    expect(Buffer.from(bytesOf(calls[0].body)).equals(zip)).toBe(true);
   });
 
   it('never retries, so an upload cannot run twice', async () => {
@@ -171,12 +164,7 @@ describe('WebStoreClient errors', () => {
     json: unknown,
   ): Promise<Error & { code: string }> => {
     mockHttp({ [UPLOAD]: { status, json } });
-    try {
-      await make().upload(Buffer.from('z'));
-    } catch (error) {
-      return error as Error & { code: string };
-    }
-    throw new Error('expected the upload to fail');
+    return codedRejectionOf(make().upload(Buffer.from('z')));
   };
 
   it('explains a 400 with the Google message and a checklist (issues 7, 69)', async () => {
@@ -309,10 +297,13 @@ describe('WebStoreClient.publish', () => {
 });
 
 describe('WebStoreClient polling edge cases', () => {
-  const polling = (status: unknown, extra: Record<string, unknown> = {}) =>
+  const polling = (
+    status: Parameters<typeof mockHttp>[0][string],
+    extra: Record<string, unknown> = {},
+  ) =>
     mockHttp({
       [UPLOAD]: { json: { uploadState: 'IN_PROGRESS' } },
-      [STATUS]: status as never,
+      [STATUS]: status,
       [PUBLISH]: { json: { state: 'PUBLISHED' } },
       ...extra,
     });
@@ -513,10 +504,10 @@ describe('auth', () => {
     it('reports each missing OAuth variable with the original codes', async () => {
       const failure = await resolveCredentials({
         GOOGLE_CLIENT_ID: 'id',
-      }).catch((error: unknown) => error as AggregateError);
+      }).catch((error: unknown) => error);
       expect(
-        (failure as AggregateError).errors.map(
-          (error: { code: string }) => error.code,
+        (failure instanceof AggregateError ? failure.errors : []).map((error) =>
+          codeOf(error),
         ),
       ).toEqual(['EGOOGLECLIENTSECRET', 'EGOOGLEREFRESHTOKEN']);
     });
@@ -732,7 +723,10 @@ describe('auth', () => {
         GOOGLE_SERVICE_ACCOUNT_KEY: serviceAccountJson,
       });
       expect(await tokenFor(credentials)).toBe('sa-token');
-      const body = calls[0].body as { grant_type: string; assertion: string };
+      const body = calls[0].body;
+      if (!isRecord(body) || typeof body.assertion !== 'string') {
+        throw new TypeError('Expected a token request with an assertion');
+      }
       expect(body.grant_type).toBe(
         'urn:ietf:params:oauth:grant-type:jwt-bearer',
       );
@@ -741,15 +735,22 @@ describe('auth', () => {
         alg: 'RS256',
         typ: 'JWT',
       });
-      const payload = JSON.parse(
+      const payload: unknown = JSON.parse(
         Buffer.from(claims, 'base64url').toString(),
-      ) as Record<string, unknown>;
+      );
+      if (
+        !isRecord(payload) ||
+        typeof payload.exp !== 'number' ||
+        typeof payload.iat !== 'number'
+      ) {
+        throw new TypeError('Expected the claims to carry exp and iat');
+      }
       expect(payload).toMatchObject({
         iss: 'bot@project.iam.gserviceaccount.com',
         scope: 'https://www.googleapis.com/auth/chromewebstore',
         aud: 'https://oauth2.googleapis.com/token',
       });
-      expect((payload.exp as number) - (payload.iat as number)).toBe(3600);
+      expect(payload.exp - payload.iat).toBe(3600);
       const ok = createVerify('RSA-SHA256')
         .update(`${header}.${claims}`)
         .verify(
@@ -916,13 +917,13 @@ describe('request', () => {
     const saved = { ...process.env };
     process.env.HTTPS_PROXY = urls.malformedProxy;
     try {
-      const failure = await request(URL_A, {}).catch((error: unknown) => error);
+      const failure = await rejectionOf(request(URL_A, {}), Error);
       expect(failure).toMatchObject({ code: 'EPROXY' });
       const shown = [
         String(failure),
         inspect(failure, { depth: 10, showHidden: true }),
         JSON.stringify(failure, Object.getOwnPropertyNames(failure)),
-        JSON.stringify(Object.entries(failure as object)),
+        JSON.stringify(Object.entries(failure)),
       ].join('\n');
       expect(shown).not.toContain('PW-SECRET');
       expect(shown).toContain('HTTPS_PROXY');
@@ -1423,12 +1424,15 @@ describe('client', () => {
       mockHttp({
         [ROLLBACK]: { status: 401, json: { error: { message: 'bad' } } },
       });
-      const failure = (await rollback({
-        ...base,
-        rollbackReason: 'x',
-        // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
-        newVersion: '1.0.1',
-      }).catch((error: unknown) => error)) as Error;
+      const failure = await rejectionOf(
+        rollback({
+          ...base,
+          rollbackReason: 'x',
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- newVersion is a field of the Chrome Web Store API request, so it keeps its name
+          newVersion: '1.0.1',
+        }),
+        Error,
+      );
       expect(failure.message).not.toContain('SECRET-TOKEN');
     });
   });
@@ -1572,10 +1576,8 @@ describe('WebStoreClient response parsing', () => {
         },
       },
     });
-    const failure = await make()
-      .upload(Buffer.from('z'))
-      .catch((error: unknown) => error as Error);
-    expect((failure as Error).message).toContain('(R1)');
+    const failure = await rejectionOf(make().upload(Buffer.from('z')), Error);
+    expect(failure.message).toContain('(R1)');
   });
 });
 

@@ -8,8 +8,10 @@ import {
   publish,
   verifyConditions,
 } from '../src/index.js';
+import { codeOf } from '../src/utils/error.js';
+import { isRecord } from '../src/utils/object.js';
 import { loadFixture } from './utils/fixtures.js';
-import { mockHttp } from './utils/http-mock.js';
+import { bytesOf, mockHttp } from './utils/http-mock.js';
 import {
   BASE,
   CONFIG,
@@ -20,14 +22,9 @@ import {
   UPLOAD,
   stepContext,
 } from './utils/context.js';
+import { rejectionOf } from './utils/rejection.js';
 import { withTmp } from './utils/tmpdir.js';
 import { unzip } from './utils/unzip.js';
-import type {
-  AddChannelContext,
-  PrepareContext,
-  PublishContext,
-  VerifyConditionsContext,
-} from 'semantic-release';
 
 /** Locale-aware comparer, built once. */
 const collator = new Intl.Collator();
@@ -86,15 +83,16 @@ describe('plugin entry point', () => {
           [PUBLISH]: { json: { state: 'PENDING_REVIEW' } },
         });
         const { context } = stepContext({ cwd: dir });
-        const ctx = context as unknown as PublishContext;
+        const ctx = context;
         await plugin.verifyConditions(CONFIG, ctx);
         await plugin.prepare(CONFIG, ctx);
         const release = await plugin.publish(CONFIG, ctx);
         expect(release?.url).toBe(
           'https://chromewebstore.google.com/detail/ext-1',
         );
-        const uploaded = calls.find((c) => c.url.endsWith(':upload'))
-          ?.body as Uint8Array;
+        const uploaded = bytesOf(
+          calls.find((c) => c.url.endsWith(':upload'))?.body,
+        );
         const entries = await unzip(Buffer.from(uploaded));
         expect(JSON.parse(entries['manifest.json'].toString())).toMatchObject({
           version: '1.1.0',
@@ -171,20 +169,15 @@ describe('verifyConditions', () => {
     const { context, lines } = stepContext(extra);
     return {
       lines,
-      result: verifyConditions(
-        { ...CONFIG, ...config },
-        context as unknown as VerifyConditionsContext,
-      ),
+      result: verifyConditions({ ...CONFIG, ...config }, context),
     };
   };
 
   const codes = async (promise: Promise<unknown>): Promise<string[]> => {
     const failure = await promise.catch((error: unknown) => error);
-    const list =
-      failure instanceof AggregateError
-        ? (failure.errors as Error[])
-        : [failure as Error];
-    return list.map((error) => (error as Error & { code: string }).code);
+    const list: unknown[] =
+      failure instanceof AggregateError ? failure.errors : [failure];
+    return list.map((error) => String(codeOf(error)));
   };
 
   describe('verifyConditions', () => {
@@ -294,12 +287,8 @@ describe('verifyConditions', () => {
         },
       });
       const { result } = run({});
-      const failure = (await result.catch(
-        (error: unknown) => error,
-      )) as Error & {
-        code: string;
-      };
-      expect(failure.code).toBe('EWEBSTOREAUTH');
+      const failure = await rejectionOf(result, Error);
+      expect(codeOf(failure)).toBe('EWEBSTOREAUTH');
       expect(failure.message).not.toContain('SECRET-TOKEN');
     });
 
@@ -333,10 +322,7 @@ describe('prepare', () => {
     const { context, lines } = stepContext({ cwd: dir, ...extra });
     return {
       lines,
-      result: prepare(
-        { ...CONFIG, ...config },
-        context as unknown as PrepareContext,
-      ),
+      result: prepare({ ...CONFIG, ...config }, context),
     };
   };
 
@@ -544,10 +530,7 @@ describe('publish', () => {
     const { context, lines } = stepContext({ cwd: dir, ...extra });
     return {
       lines,
-      result: publish(
-        { ...CONFIG, ...config },
-        context as unknown as PublishContext,
-      ),
+      result: publish({ ...CONFIG, ...config }, context),
     };
   };
 
@@ -884,12 +867,12 @@ describe('publish', () => {
         { extensionId: unset, publisherId: unset, asset: unset },
         { env: {} },
       );
-      const failure = (await result.catch(
-        (error: unknown) => error,
-      )) as AggregateError;
-      expect(
-        failure.errors.map((error: Error & { code?: string }) => error.code),
-      ).toEqual(['ENOASSET', 'ENOEXTENSIONID', 'ENOPUBLISHERID']);
+      const failure = await rejectionOf(result, AggregateError);
+      expect(failure.errors.map((error: unknown) => codeOf(error))).toEqual([
+        'ENOASSET',
+        'ENOEXTENSIONID',
+        'ENOPUBLISHERID',
+      ]);
     });
 
     it('fails with ENOASSETFILE when prepare has not produced the zip', async () => {
@@ -917,9 +900,7 @@ describe('publish', () => {
           [PUBLISH]: { status: 403, json: { error: { message: 'denied' } } },
         });
         const { result, lines } = run(dir);
-        const failure = (await result.catch(
-          (error: unknown) => error,
-        )) as Error;
+        const failure = await rejectionOf(result, Error);
         expect(failure.message).not.toContain('SECRET-TOKEN');
         expect(lines.join('\n')).not.toContain('SECRET-TOKEN');
       });
@@ -951,7 +932,10 @@ describe('publish', () => {
         await run(dir, config).result;
         sent = calls[2].body;
       });
-      return sent as Record<string, unknown>;
+      if (!isRecord(sent)) {
+        throw new TypeError('Expected a JSON object body');
+      }
+      return sent;
     };
 
     it('asks the store to block before submitting when no warning may be ignored', async () => {
@@ -1015,9 +999,10 @@ describe('publish', () => {
             },
           },
         });
-        const failure = (await run(dir, { failOnWarnings: true }).result.catch(
-          (error: unknown) => error,
-        )) as AggregateError;
+        const failure = await rejectionOf(
+          run(dir, { failOnWarnings: true }).result,
+          AggregateError,
+        );
         expect(failure).toBeInstanceOf(AggregateError);
         expect(failure.errors).toEqual([
           expect.objectContaining({ code: 'BROAD_HOSTS', message: 'broad' }),
@@ -1167,10 +1152,7 @@ describe('addChannel', () => {
     const { context, lines } = stepContext(extra);
     return {
       lines,
-      result: addChannel(
-        { ...CONFIG, ...config },
-        context as unknown as AddChannelContext,
-      ),
+      result: addChannel({ ...CONFIG, ...config }, context),
     };
   };
 
@@ -1215,9 +1197,12 @@ describe('addChannel', () => {
     it('rejects an invalid percentage with the deployPercentage code', async () => {
       mockHttp({});
       for (const value of [101, -1, 2.5]) {
-        const failure = (await run({
-          promoteDeployPercentage: value,
-        }).result.catch((error: unknown) => error)) as AggregateError;
+        const failure = await rejectionOf(
+          run({
+            promoteDeployPercentage: value,
+          }).result,
+          AggregateError,
+        );
         expect(failure.errors[0]).toMatchObject({
           code: 'EINVALIDDEPLOYPERCENTAGE',
         });
@@ -1226,17 +1211,21 @@ describe('addChannel', () => {
 
     it('reports missing options and credentials', async () => {
       mockHttp({});
-      const missing = (await run(
-        {
-          promoteDeployPercentage: 5,
-          extensionId: unset,
-          publisherId: unset,
-        },
-        { env: {} },
-      ).result.catch((error: unknown) => error)) as AggregateError;
-      expect(
-        missing.errors.map((error: Error & { code?: string }) => error.code),
-      ).toEqual(['ENOEXTENSIONID', 'ENOPUBLISHERID']);
+      const missing = await rejectionOf(
+        run(
+          {
+            promoteDeployPercentage: 5,
+            extensionId: unset,
+            publisherId: unset,
+          },
+          { env: {} },
+        ).result,
+        AggregateError,
+      );
+      expect(missing.errors.map((error: unknown) => codeOf(error))).toEqual([
+        'ENOEXTENSIONID',
+        'ENOPUBLISHERID',
+      ]);
       await expect(
         run({ promoteDeployPercentage: 5 }, { env: {} }).result,
       ).rejects.toMatchObject({ code: 'ENOCREDENTIALS' });
