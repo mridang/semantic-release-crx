@@ -10,4 +10,10 @@ export default [
     files: ['src/webstore.ts', 'test/index.test.ts', 'test/webstore.test.ts'],
     rules: { 'sonarjs/max-lines': 'off' },
   },
+  {
+    // The rule requires every file to hold a test; only *.test.ts files are tests.
+    files: ['**/*.{js,mjs,cjs,ts}'],
+    ignores: ['**/*.test.ts'],
+    rules: { 'sonarjs/no-empty-test-file': 'off' },
+  },
 ];
